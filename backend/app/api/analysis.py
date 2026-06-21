@@ -14,6 +14,7 @@ from app.models import AnalysisResult, Evidence, Task, User
 from app.schemas import AppError
 from app.schemas_analysis import ConflictStatusUpdate
 from app.services import orchestrator, result_service
+from app.services.audit_service import record_audit
 from app.services.task_service import ensure_task_access
 from app.skills.base import SkillContext
 from app.skills.report_generate import ReportGenerateSkill, write_latest_report
@@ -96,6 +97,15 @@ def start_analysis_run(
     current_user: User = Depends(get_current_user),
 ) -> dict:
     run = orchestrator.start_run(db, task_id, current_user)
+    record_audit(
+        db,
+        user_id=current_user.id,
+        action="analysis_started",
+        resource_type="task",
+        resource_id=task_id,
+        detail={"run_id": run.id},
+    )
+    db.commit()
     background_tasks.add_task(orchestrator.execute_run, task_id, run.id)
     return {"data": {"run_id": run.id, "status": "queued"}, "message": "ok"}
 
@@ -195,4 +205,13 @@ def download_report(
     filename = f"{_safe_filename_part(task.name)}_分析报告_{timestamp}.md"
     quoted = quote(filename)
     headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quoted}"}
+    record_audit(
+        db,
+        user_id=current_user.id,
+        action="report_downloaded",
+        resource_type="task",
+        resource_id=task.id,
+        detail={"filename": filename},
+    )
+    db.commit()
     return FileResponse(report_path, media_type="text/markdown; charset=utf-8", headers=headers)

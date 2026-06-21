@@ -411,6 +411,7 @@ def serialize_run(run: TaskRun) -> dict[str, Any]:
     return {
         "run_id": run.id,
         "status": run.status,
+        "plan_json": _json_load(run.plan_json, {}),
         "progress": run.progress,
         "current_step": run.current_step,
         "warnings": _warnings(run),

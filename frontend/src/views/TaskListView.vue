@@ -46,6 +46,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 
 import { apiClient } from "@/api/client";
 import { useAuthStore } from "@/stores/auth";
+import { formatDate, taskStatusLabel, taskStatusOptions, taskStatusTag } from "@/utils/status";
 
 interface TaskSummary {
   id: string;
@@ -65,18 +66,7 @@ const loading = ref(false);
 const keyword = ref("");
 const statusFilter = ref("");
 
-const statusOptions = [
-  { value: "draft", label: "草稿" },
-  { value: "ready", label: "可分析" },
-  { value: "queued", label: "排队中" },
-  { value: "parsing", label: "解析中" },
-  { value: "extracting", label: "提取中" },
-  { value: "detecting_conflicts", label: "冲突检测" },
-  { value: "generating_report", label: "生成报告" },
-  { value: "awaiting_review", label: "待审核" },
-  { value: "completed", label: "已完成" },
-  { value: "failed", label: "失败" }
-];
+const statusOptions = taskStatusOptions;
 
 const filteredTasks = computed(() => {
   const term = keyword.value.trim().toLowerCase();
@@ -113,27 +103,6 @@ async function confirmDelete(task: TaskSummary) {
   await loadTasks();
 }
 
-function statusLabel(status: string): string {
-  return statusOptions.find((option) => option.value === status)?.label ?? status;
-}
-
-function statusTag(status: string) {
-  if (status === "failed") {
-    return "danger";
-  }
-  if (status === "completed" || status === "awaiting_review") {
-    return "success";
-  }
-  if (["queued", "parsing", "extracting", "detecting_conflicts", "generating_report"].includes(status)) {
-    return "warning";
-  }
-  if (status === "ready") {
-    return "primary";
-  }
-  return "info";
-}
-
-function formatDate(value: string): string {
-  return new Date(value).toLocaleString();
-}
+const statusLabel = taskStatusLabel;
+const statusTag = taskStatusTag;
 </script>
