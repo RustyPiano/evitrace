@@ -28,8 +28,24 @@ Backend:
 cd backend
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 uvicorn app.main:app --reload
+```
+
+M2 parsing dependency split:
+
+- `requirements.txt` includes deterministic document parsing dependencies: PyMuPDF, python-docx,
+  charset-normalizer, and Pillow.
+- `requirements-optional.txt` contains heavy local model packages for real OCR/ASR. The default
+  `MOCK_AI=true` mode does not require them and will not import PaddleOCR or faster-whisper.
+- To run real OCR/ASR/video parsing, install optional packages separately, prepare model weights
+  offline, ensure `ffmpeg` is on `PATH`, then set `MOCK_AI=false`:
+
+```bash
+cd backend
+source .venv/bin/activate
+pip install -r requirements-optional.txt
+MOCK_AI=false uvicorn app.main:app --reload
 ```
 
 重置本机首个管理员：

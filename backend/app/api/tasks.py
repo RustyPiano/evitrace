@@ -1,8 +1,11 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, BackgroundTasks, Depends, status
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_current_user, get_db
-from app.models import User
+from app.constants import TASK_RUNNING_STATUSES, TASK_STATUS_PARSING
+from app.models import TaskFile, User
+from app.schemas import AppError
+from app.services import parse_service
 from app.schemas import TaskCreate, TaskUpdate
 from app.services import task_service
 
@@ -56,3 +59,24 @@ def delete_task(
 ) -> dict:
     task_service.delete_task(db, task_id, current_user)
     return {"data": {"id": task_id}, "message": "ok"}
+
+
+@router.post("/{task_id}/parse", status_code=status.HTTP_202_ACCEPTED)
+def parse_task_files(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    task = task_service.ensure_task_access(db, task_id, current_user)
+    if task.status in TASK_RUNNING_STATUSES:
+        raise AppError("TASK_ALREADY_RUNNING", "已有任务运行", status.HTTP_409_CONFLICT)
+    file_count = db.query(TaskFile).filter(TaskFile.task_id == task.id).count()
+    if file_count == 0:
+        raise AppError("TASK_NOT_READY", "无可分析文件", status.HTTP_409_CONFLICT)
+
+    task.status = TASK_STATUS_PARSING
+    task.last_error = None
+    db.commit()
+    background_tasks.add_task(parse_service.parse_all_files, task.id)
+    return {"data": {"task_id": task.id, "status": TASK_STATUS_PARSING}, "message": "ok"}

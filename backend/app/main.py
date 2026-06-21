@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .api import admin, auth, files, tasks
+from .api import admin, auth, evidence, files, tasks
 from .config import settings
 from .database import SessionLocal, initialize_database
 from .schemas import AppError, ErrorDetail, ErrorResponse
@@ -62,6 +62,7 @@ def create_app() -> FastAPI:
     api_router.include_router(auth.router)
     api_router.include_router(tasks.router)
     api_router.include_router(files.router)
+    api_router.include_router(evidence.router)
     api_router.include_router(admin.router)
 
     app.include_router(api_router)

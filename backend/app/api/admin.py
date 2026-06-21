@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.dependencies import get_db, require_admin
 from app.models import User
-from app.schemas import AdminUserCreate, AdminUserUpdate
+from app.schemas import AdminSkillUpdate, AdminUserCreate, AdminUserUpdate
 from app.services import admin_service
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -40,5 +40,26 @@ def update_user(
 ) -> dict:
     return {
         "data": admin_service.update_user(db, user_id, payload, current_user),
+        "message": "ok",
+    }
+
+
+@router.get("/skills")
+def list_skills(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+) -> dict:
+    return {"data": admin_service.list_skills(db), "message": "ok"}
+
+
+@router.patch("/skills/{skill_id}")
+def update_skill(
+    skill_id: str,
+    payload: AdminSkillUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+) -> dict:
+    return {
+        "data": admin_service.update_skill(db, skill_id, payload, current_user),
         "message": "ok",
     }

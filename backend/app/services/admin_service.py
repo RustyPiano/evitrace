@@ -6,10 +6,11 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.constants import ROLE_ADMIN
-from app.models import User
-from app.schemas import AdminUserCreate, AdminUserUpdate, AppError
+from app.models import SkillConfig, User
+from app.schemas import AdminSkillUpdate, AdminUserCreate, AdminUserUpdate, AppError
 from app.services.audit_service import record_audit
 from app.services.auth_service import hash_password
+from app.skills.registry import serialize_skill_config, set_skill_enabled
 
 
 def _isoformat(value: datetime | None) -> str | None:
@@ -123,3 +124,28 @@ def update_user(
     db.commit()
     db.refresh(user)
     return serialize_admin_user(user)
+
+
+def list_skills(db: Session) -> list[dict[str, Any]]:
+    skills = db.query(SkillConfig).order_by(SkillConfig.skill_id.asc()).all()
+    return [serialize_skill_config(skill) for skill in skills]
+
+
+def update_skill(
+    db: Session,
+    skill_id: str,
+    payload: AdminSkillUpdate,
+    current_user: User,
+) -> dict[str, Any]:
+    config = set_skill_enabled(db, skill_id, payload.enabled)
+    record_audit(
+        db,
+        user_id=current_user.id,
+        action="skill_updated",
+        resource_type="skill",
+        resource_id=config.skill_id,
+        detail={"enabled": config.enabled},
+    )
+    db.commit()
+    db.refresh(config)
+    return serialize_skill_config(config)
