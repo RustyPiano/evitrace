@@ -1,0 +1,9 @@
+data/
+.orchestration/logs/
+__pycache__/
+*.pyc
+node_modules/
+.venv/
+venv/
+dist/
+.DS_Store
