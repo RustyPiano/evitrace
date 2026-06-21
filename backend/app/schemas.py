@@ -1,5 +1,7 @@
 from fastapi import status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.constants import ROLE_ADMIN, ROLE_ANALYST
 
 
 class ErrorDetail(BaseModel):
@@ -34,6 +36,32 @@ class CurrentUser(UserPublic):
     is_active: bool
 
 
+class AdminUserCreate(BaseModel):
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=1)
+    role: str = ROLE_ANALYST
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, value: str) -> str:
+        if value not in {ROLE_ANALYST, ROLE_ADMIN}:
+            raise ValueError("role must be analyst or admin")
+        return value
+
+
+class AdminUserUpdate(BaseModel):
+    is_active: bool | None = None
+    role: str | None = None
+    password: str | None = Field(default=None, min_length=1)
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, value: str | None) -> str | None:
+        if value is not None and value not in {ROLE_ANALYST, ROLE_ADMIN}:
+            raise ValueError("role must be analyst or admin")
+        return value
+
+
 class LoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=100)
     password: str = Field(min_length=1)
@@ -56,8 +84,3 @@ class TaskUpdate(BaseModel):
     objective: str | None = Field(default=None, min_length=1, max_length=1000)
     description: str | None = Field(default=None, max_length=2000)
     status: str | None = None
-
-
-class SuccessResponse(BaseModel):
-    data: object
-    message: str = "ok"

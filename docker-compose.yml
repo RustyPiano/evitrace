@@ -5,7 +5,7 @@ services:
     build:
       context: ./backend
     env_file:
-      - .env.example
+      - .env
     environment:
       DATA_ROOT: /app/data
       DATABASE_URL: sqlite:////app/data/app.db

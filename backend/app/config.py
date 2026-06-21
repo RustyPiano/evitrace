@@ -1,13 +1,17 @@
 from functools import lru_cache
+import sys
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field, ValidationError, field_validator
+from pydantic import Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict, SettingsError
 from sqlalchemy.engine import make_url
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+WEAK_SECRET_KEYS = {"change-me", ""}
+MIN_SECRET_KEY_LENGTH = 32
+DEFAULT_FIRST_ADMIN_PASSWORD = "admin123456"
 
 
 class Settings(BaseSettings):
@@ -58,7 +62,6 @@ class Settings(BaseSettings):
     @field_validator(
         "app_name",
         "env",
-        "secret_key",
         "database_url",
         "data_root",
         "local_llm_base_url",
@@ -72,6 +75,38 @@ class Settings(BaseSettings):
         if not value.strip():
             raise ValueError("must not be empty")
         return value
+
+    @model_validator(mode="after")
+    def validate_secrets_for_environment(self) -> "Settings":
+        env = self.env.strip().lower()
+        secret_key = self.secret_key.strip()
+        weak_secret = (
+            secret_key in WEAK_SECRET_KEYS
+            or len(secret_key.encode("utf-8")) < MIN_SECRET_KEY_LENGTH
+        )
+        default_admin_password = self.first_admin_password == DEFAULT_FIRST_ADMIN_PASSWORD
+
+        warnings: list[str] = []
+        if weak_secret:
+            message = (
+                "SECRET_KEY is missing, default, or shorter than "
+                f"{MIN_SECRET_KEY_LENGTH} bytes"
+            )
+            if env == "production":
+                raise ValueError(message)
+            warnings.append(message)
+        if default_admin_password:
+            message = "FIRST_ADMIN_PASSWORD is still the default admin123456"
+            if env == "production":
+                raise ValueError(message)
+            warnings.append(message)
+
+        if warnings and env == "development":
+            print(
+                "WARNING: insecure development configuration: " + "; ".join(warnings),
+                file=sys.stderr,
+            )
+        return self
 
     @field_validator("cors_origins", mode="before")
     @classmethod

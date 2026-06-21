@@ -1,8 +1,8 @@
-fastapi
-uvicorn[standard]
-pydantic
-pydantic-settings
-SQLAlchemy>=2.0,<3.0
-python-multipart
-bcrypt
-PyJWT
+fastapi==0.138.0
+uvicorn[standard]==0.49.0
+pydantic==2.13.4
+pydantic-settings==2.14.2
+SQLAlchemy==2.0.51
+python-multipart==0.0.32
+bcrypt==5.0.0
+PyJWT==2.13.0

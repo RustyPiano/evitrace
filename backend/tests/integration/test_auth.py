@@ -1,5 +1,5 @@
 from app.database import SessionLocal
-from app.models import AuditLog
+from app.models import AuditLog, User
 
 from tests.conftest import login_headers
 
@@ -47,6 +47,30 @@ def test_inactive_user_login_returns_403(client, create_user):
 
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "INACTIVE_USER"
+
+
+def test_existing_token_for_deactivated_user_returns_403(client, create_user):
+    create_user("disabled-later")
+    headers = login_headers(client, "disabled-later", "password")
+    with SessionLocal() as db:
+        user = db.query(User).filter(User.username == "disabled-later").one()
+        user.is_active = False
+        db.commit()
+
+    response = client.get("/api/v1/auth/me", headers=headers)
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "INACTIVE_USER"
+
+
+def test_password_over_bcrypt_limit_returns_clear_error(client):
+    response = client.post(
+        "/api/v1/auth/login",
+        json={"username": "admin", "password": "x" * 73},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["code"] == "PASSWORD_TOO_LONG"
 
 
 def test_missing_token_returns_401(client):

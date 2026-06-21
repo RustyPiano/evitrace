@@ -15,11 +15,11 @@ from app.constants import (
     TASK_STATUS_DRAFT,
     TASK_STATUS_READY,
 )
-from app.models import SkillConfig, Task, TaskFile, User
+from app.models import Evidence, SkillConfig, Task, TaskFile, User
 from app.schemas import AppError
 from app.services.audit_service import record_audit
 from app.services.task_service import ensure_task_access, serialize_file, task_not_found
-from app.utils.file_types import validate_upload_type
+from app.utils.file_types import HEADER_READ_BYTES, validate_file_signature, validate_upload_type
 
 CHUNK_SIZE = 1024 * 1024
 PARSER_SKILL_BY_MODALITY = {
@@ -92,6 +92,12 @@ async def upload_task_files(
             saved_paths.append(destination)
             try:
                 with destination.open("wb") as output:
+                    header = await upload.read(HEADER_READ_BYTES)
+                    validate_file_signature(extension, header)
+                    size += len(header)
+                    if size > max_upload_bytes():
+                        raise AppError("FILE_TOO_LARGE", "文件过大", status.HTTP_413_CONTENT_TOO_LARGE)
+                    output.write(header)
                     while True:
                         chunk = await upload.read(CHUNK_SIZE)
                         if not chunk:
@@ -168,8 +174,15 @@ def delete_file(db: Session, file_id: str, current_user: User) -> None:
         raise task_not_found()
     if task.status in TASK_RUNNING_STATUSES:
         raise AppError("TASK_ALREADY_RUNNING", "运行中任务不可删除文件", status.HTTP_409_CONFLICT)
+    if task.status not in {TASK_STATUS_DRAFT, TASK_STATUS_READY}:
+        raise AppError(
+            "FILE_DELETE_NOT_ALLOWED",
+            "已分析任务不可直接删除文件，请重新分析任务",
+            status.HTTP_409_CONFLICT,
+        )
 
     safe_original_path(file.task_id, file.stored_name).unlink(missing_ok=True)
+    db.query(Evidence).filter(Evidence.file_id == file.id).delete()
     db.delete(file)
     remaining = (
         db.query(func.count(TaskFile.id))
@@ -196,16 +209,29 @@ def parse_range_header(range_header: str | None, file_size: int) -> tuple[int, i
     value = range_header.removeprefix("bytes=")
     start_text, _, end_text = value.partition("-")
     if not start_text and not end_text:
-        return None
-    if start_text:
-        start = int(start_text)
-        end = int(end_text) if end_text else file_size - 1
-    else:
-        suffix_size = int(end_text)
-        start = max(file_size - suffix_size, 0)
-        end = file_size - 1
+        raise AppError("INVALID_RANGE", "Range 头格式无效", status.HTTP_416_RANGE_NOT_SATISFIABLE)
+    try:
+        if start_text:
+            start = int(start_text)
+            end = int(end_text) if end_text else file_size - 1
+        else:
+            suffix_size = int(end_text)
+            start = max(file_size - suffix_size, 0)
+            end = file_size - 1
+    except ValueError as exc:
+        raise AppError(
+            "INVALID_RANGE",
+            "Range 头格式无效",
+            status.HTTP_416_RANGE_NOT_SATISFIABLE,
+        ) from exc
+    if not start_text and suffix_size <= 0:
+        raise AppError("INVALID_RANGE", "Range 头格式无效", status.HTTP_416_RANGE_NOT_SATISFIABLE)
+    if start_text and start < 0:
+        raise AppError("INVALID_RANGE", "Range 头格式无效", status.HTTP_416_RANGE_NOT_SATISFIABLE)
+    if start_text and end_text and end < 0:
+        raise AppError("INVALID_RANGE", "Range 头格式无效", status.HTTP_416_RANGE_NOT_SATISFIABLE)
     if start < 0 or end < start or start >= file_size:
-        return None
+        raise AppError("INVALID_RANGE", "Range 超出文件范围", status.HTTP_416_RANGE_NOT_SATISFIABLE)
     return start, min(end, file_size - 1)
 
 

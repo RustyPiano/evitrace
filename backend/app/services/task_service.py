@@ -10,10 +10,11 @@ from app.config import settings
 from app.constants import (
     ROLE_ADMIN,
     TASK_RUNNING_STATUSES,
+    TASK_STATUS_AWAITING_REVIEW,
     TASK_STATUS_COMPLETED,
     TASK_STATUS_DRAFT,
 )
-from app.models import AnalysisResult, AuditLog, Evidence, Task, TaskFile, TaskRun, User
+from app.models import AnalysisResult, Evidence, Task, TaskFile, TaskRun, User
 from app.schemas import AppError, TaskCreate, TaskUpdate
 from app.services.audit_service import record_audit
 
@@ -152,6 +153,12 @@ def update_task(
         if value is not None:
             setattr(task, field, value)
     if payload.status == TASK_STATUS_COMPLETED:
+        if task.status != TASK_STATUS_AWAITING_REVIEW:
+            raise AppError(
+                "INVALID_STATUS_TRANSITION",
+                "仅允许 awaiting_review 任务标记为 completed",
+                status.HTTP_409_CONFLICT,
+            )
         task.status = TASK_STATUS_COMPLETED
 
     db.commit()
@@ -172,11 +179,6 @@ def delete_task(db: Session, task_id: str, current_user: User) -> None:
     db.query(Evidence).filter(Evidence.task_id == task.id).delete()
     db.query(TaskRun).filter(TaskRun.task_id == task.id).delete()
     db.query(TaskFile).filter(TaskFile.task_id == task.id).delete()
-    db.query(AuditLog).filter(
-        AuditLog.resource_type == "task",
-        AuditLog.resource_id == task.id,
-        AuditLog.action != "task_deleted",
-    ).delete()
     db.delete(task)
     record_audit(
         db,
