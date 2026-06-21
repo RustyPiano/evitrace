@@ -36,7 +36,8 @@ class LocalLLMClient:
         self.api_key = api_key or settings.local_llm_api_key
         self.model = model or settings.local_llm_model
         self.timeout_sec = timeout_sec or settings.llm_timeout_sec
-        self.max_retries = settings.llm_max_retries if max_retries is None else max_retries
+        configured_retries = settings.llm_max_retries if max_retries is None else max_retries
+        self.max_retries = max(0, min(configured_retries, 2))
         self.http_client = http_client
         self.mock_json = mock_json
         self.mock_text = mock_text
@@ -155,6 +156,12 @@ class LocalLLMClient:
                 timeout=self.timeout_sec,
             )
             response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise AppError(
+                "LOCAL_MODEL_UNAVAILABLE",
+                f"本地模型返回 HTTP {exc.response.status_code}",
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from exc
         except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError) as exc:
             raise AppError(
                 "LOCAL_MODEL_UNAVAILABLE",
@@ -165,7 +172,14 @@ class LocalLLMClient:
             if close_client:
                 client.close()
 
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise AppError(
+                "INVALID_MODEL_OUTPUT",
+                "模型响应不是有效 JSON",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+            ) from exc
         duration_ms = int((perf_counter() - started) * 1000)
         usage = data.get("usage") if isinstance(data, dict) else None
         if isinstance(usage, dict):

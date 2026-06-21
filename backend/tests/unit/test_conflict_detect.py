@@ -51,6 +51,97 @@ def test_does_not_detect_time_conflict_within_threshold():
     assert conflicts == []
 
 
+def test_does_not_detect_time_conflict_at_exact_threshold():
+    conflicts, _ = detect_conflicts(
+        [
+            _event("EVT-001", time_normalized="2026-06-01T14:00:00"),
+            _event("EVT-002", time_normalized="2026-06-01T14:30:00"),
+        ],
+        time_conflict_minutes=30,
+    )
+
+    assert conflicts == []
+
+
+def test_detects_time_conflict_across_midnight_over_threshold():
+    conflicts, _ = detect_conflicts(
+        [
+            _event("EVT-001", time_normalized="2026-06-01T23:50:00"),
+            _event("EVT-002", time_normalized="2026-06-02T00:30:00"),
+        ],
+        time_conflict_minutes=30,
+    )
+
+    assert [conflict["type"] for conflict in conflicts] == ["time"]
+
+
+def test_does_not_detect_time_conflict_across_midnight_at_threshold():
+    conflicts, _ = detect_conflicts(
+        [
+            _event("EVT-001", time_normalized="2026-06-01T23:50:00"),
+            _event("EVT-002", time_normalized="2026-06-02T00:20:00"),
+        ],
+        time_conflict_minutes=30,
+    )
+
+    assert conflicts == []
+
+
+def test_detects_date_conflict_only_when_dates_differ():
+    same_day_conflicts, _ = detect_conflicts(
+        [
+            _event("EVT-001", time_normalized="2026-06-01"),
+            _event("EVT-002", time_normalized="2026-06-01"),
+        ]
+    )
+    different_day_conflicts, _ = detect_conflicts(
+        [
+            _event("EVT-001", time_normalized="2026-06-01"),
+            _event("EVT-002", time_normalized="2026-06-02"),
+        ]
+    )
+
+    assert same_day_conflicts == []
+    assert [conflict["type"] for conflict in different_day_conflicts] == ["time"]
+
+
+def test_does_not_detect_date_vs_same_day_datetime_as_conflict():
+    conflicts, _ = detect_conflicts(
+        [
+            _event("EVT-001", time_normalized="2026-06-01"),
+            _event("EVT-002", time_normalized="2026-06-01T16:30:00"),
+        ]
+    )
+
+    assert conflicts == []
+
+
+def test_skips_mixed_aware_and_naive_datetimes_with_warning():
+    conflicts, warnings = detect_conflicts(
+        [
+            _event("EVT-001", time_normalized="2026-06-01T14:00:00+08:00"),
+            _event("EVT-002", time_normalized="2026-06-01T14:45:00"),
+        ],
+        time_conflict_minutes=30,
+    )
+
+    assert conflicts == []
+    assert warnings == ["EVT-001/EVT-002 时间时区信息不一致，未自动判定冲突"]
+
+
+def test_compares_time_only_values_as_same_day_clock_times():
+    conflicts, warnings = detect_conflicts(
+        [
+            _event("EVT-001", time_normalized="14:00"),
+            _event("EVT-002", time_normalized="14:45"),
+        ],
+        time_conflict_minutes=30,
+    )
+
+    assert warnings == []
+    assert [conflict["type"] for conflict in conflicts] == ["time"]
+
+
 def test_detects_location_conflict_for_same_event_key():
     conflicts, _ = detect_conflicts(
         [
@@ -60,6 +151,17 @@ def test_detects_location_conflict_for_same_event_key():
     )
 
     assert [conflict["type"] for conflict in conflicts] == ["location"]
+
+
+def test_does_not_detect_location_conflict_for_same_location_with_spacing():
+    conflicts, _ = detect_conflicts(
+        [
+            _event("EVT-001", location="地点 A"),
+            _event("EVT-002", location="地点A"),
+        ]
+    )
+
+    assert conflicts == []
 
 
 def test_detects_quantity_conflict_when_units_match_and_values_differ():

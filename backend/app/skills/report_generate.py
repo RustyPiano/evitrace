@@ -1,14 +1,23 @@
 from pathlib import Path
+import re
 from time import perf_counter
 from typing import Any
 
 from app.config import settings
 from app.services.llm_client import LocalLLMClient
-from app.utils.citations import validate_report_citations
+from app.utils.citations import CONCLUSION_HEADING_RE, validate_report_citations
 
 from .base import SkillContext, SkillManifest, SkillResult
 
 REPORT_NOTICE = "**AI 辅助生成，需人工复核。**"
+REPORT_SECTION_PATTERNS = [
+    re.compile(r"^##\s*一、\s*任务概述", re.MULTILINE),
+    re.compile(r"^##\s*二、\s*资料概况", re.MULTILINE),
+    re.compile(r"^##\s*三、\s*事件时间线", re.MULTILINE),
+    re.compile(r"^##\s*四、\s*主要冲突", re.MULTILINE),
+    CONCLUSION_HEADING_RE,
+    re.compile(r"^##\s*六、\s*未确认事项", re.MULTILINE),
+]
 
 
 def _valid_ids(evidence_items: list[dict[str, Any]]) -> set[str]:
@@ -30,6 +39,17 @@ def write_latest_report(context: SkillContext, markdown: str) -> Path:
     path = _report_path(context)
     path.write_text(markdown, encoding="utf-8")
     return path
+
+
+def _with_report_notice(markdown: str) -> str:
+    body = markdown.strip()
+    if body.startswith(REPORT_NOTICE):
+        return body
+    return f"{REPORT_NOTICE}\n\n{body}"
+
+
+def _has_required_report_sections(markdown: str) -> bool:
+    return all(pattern.search(markdown) for pattern in REPORT_SECTION_PATTERNS)
 
 
 def build_mock_report(payload: dict[str, Any]) -> str:
@@ -60,8 +80,8 @@ def build_mock_report(payload: dict[str, Any]) -> str:
     conflict_count = len(conflicts)
     return "\n\n".join(
         [
-            f"# {task.get('name') or '未命名任务'}",
             REPORT_NOTICE,
+            f"# {task.get('name') or '未命名任务'}",
             "## 一、任务概述\n"
             f"任务目标：{task.get('objective') or '未提供'}。{primary_ref}",
             "## 二、资料概况\n"
@@ -97,14 +117,14 @@ def build_fallback_report(payload: dict[str, Any]) -> str:
     ] or [f"- 未发现规则范围内冲突。{primary_ref}"]
     return "\n\n".join(
         [
-            f"# {task.get('name') or '未命名任务'}",
             REPORT_NOTICE,
+            f"# {task.get('name') or '未命名任务'}",
             f"## 一、任务概述\n任务目标：{task.get('objective') or '未提供'}。{primary_ref}",
             f"## 二、资料概况\n本次分析使用 {len(evidence)} 条证据。{primary_ref}",
             "## 三、事件时间线\n" + "\n".join(timeline_lines),
             "## 四、主要冲突\n" + "\n".join(conflict_lines),
-            "## 五、综合分析结论\n综合结论生成失败，请人工复核。",
-            "## 六、未确认事项\n- 报告正文由模板降级生成，需人工补充复核。",
+            f"## 五、综合分析结论\n综合结论生成失败，请人工复核。{primary_ref}",
+            f"## 六、未确认事项\n- 报告正文由模板降级生成，需人工补充复核。{primary_ref}",
         ]
     )
 
@@ -156,9 +176,11 @@ class ReportGenerateSkill:
                     "不得新增事实；事实性陈述必须带 [E-xxxx]；输出固定 Markdown 六个章节。"
                 )
                 markdown = client.generate_text(system_prompt, _build_model_prompt(payload))
-                if "## 五、综合分析结论" not in markdown:
+                if not _has_required_report_sections(markdown):
                     warnings.append("模型报告结构不完整，已使用模板降级")
                     markdown = build_fallback_report(payload)
+                else:
+                    markdown = _with_report_notice(markdown)
         except Exception:
             warnings.append("报告模型生成失败，已使用模板降级")
             markdown = build_fallback_report(payload)

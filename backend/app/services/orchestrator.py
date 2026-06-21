@@ -61,6 +61,25 @@ def _safe_error(exc: Exception) -> str:
     return "分析失败，请查看服务日志"
 
 
+def _force_fail_unfinished_run(task_id: str, run_id: str, message: str) -> None:
+    with SessionLocal() as db:
+        run = db.get(TaskRun, run_id)
+        task = db.get(Task, task_id)
+        changed = False
+        if run is not None and run.status in {RUN_STATUS_QUEUED, RUN_STATUS_RUNNING}:
+            run.status = RUN_STATUS_FAILED
+            run.error_message = message
+            run.finished_at = _now()
+            run.current_step = "failed"
+            changed = True
+        if task is not None and task.status in TASK_RUNNING_STATUSES:
+            task.status = TASK_STATUS_FAILED
+            task.last_error = message
+            changed = True
+        if changed:
+            db.commit()
+
+
 def _build_plan(run_id: str, files: list[TaskFile]) -> dict[str, Any]:
     steps: list[dict[str, Any]] = []
     order = 1
@@ -230,12 +249,13 @@ def run_task(task_id: str, run_id: str | None = None) -> None:
 
 def execute_run(task_id: str, run_id: str) -> None:
     warnings: list[str] = []
-    with SessionLocal() as db:
-        task = db.get(Task, task_id)
-        run = db.get(TaskRun, run_id)
-        if task is None or run is None:
-            return
-        try:
+    final_error_message = "分析任务异常中断"
+    try:
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            run = db.get(TaskRun, run_id)
+            if task is None or run is None:
+                return
             _update_state(
                 db,
                 task,
@@ -335,16 +355,24 @@ def execute_run(task_id: str, run_id: str) -> None:
                 progress=100,
                 current_step="awaiting_review",
             )
-        except Exception as exc:
-            message = _safe_error(exc)
-            logger.exception("Task run failed task_id=%s run_id=%s error=%s", task_id, run_id, type(exc).__name__)
-            run.status = RUN_STATUS_FAILED
-            run.error_message = message
-            run.finished_at = _now()
-            _set_warnings(run, warnings)
-            task.status = TASK_STATUS_FAILED
-            task.last_error = message
+    except Exception as exc:
+        final_error_message = _safe_error(exc)
+        logger.exception("Task background run crashed task_id=%s run_id=%s error=%s", task_id, run_id, type(exc).__name__)
+        with SessionLocal() as db:
+            run = db.get(TaskRun, run_id)
+            task = db.get(Task, task_id)
+            if run is not None:
+                run.status = RUN_STATUS_FAILED
+                run.error_message = final_error_message
+                run.finished_at = _now()
+                run.current_step = "failed"
+                _set_warnings(run, warnings)
+            if task is not None:
+                task.status = TASK_STATUS_FAILED
+                task.last_error = final_error_message
             db.commit()
+    finally:
+        _force_fail_unfinished_run(task_id, run_id, final_error_message)
 
 
 def recover_interrupted_runs() -> None:
@@ -358,6 +386,7 @@ def recover_interrupted_runs() -> None:
             run.status = RUN_STATUS_FAILED
             run.error_message = INTERRUPTED_MESSAGE
             run.finished_at = _now()
+            run.current_step = "failed"
             task = db.get(Task, run.task_id)
             if task is not None and task.status in TASK_RUNNING_STATUSES:
                 task.status = TASK_STATUS_FAILED

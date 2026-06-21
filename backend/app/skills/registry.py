@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import importlib.util
 import shutil
 from typing import Any
@@ -10,6 +12,7 @@ from app.constants import SKILL_STATUS_ERROR, SKILL_STATUS_HEALTHY, SKILL_STATUS
 from app.models import SkillConfig
 from app.schemas import AppError
 
+from .base import SkillManifest
 from .audio_transcribe import AudioTranscribeSkill, resolve_asr_model_path
 from .conflict_detect import ConflictDetectSkill
 from .document_parse import DocumentParseSkill

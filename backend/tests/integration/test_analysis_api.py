@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from urllib.parse import unquote
 
 from app.constants import (
@@ -65,7 +66,9 @@ def test_analysis_mock_flow_results_patch_download_and_rerun(client, create_user
     assert len(results["events"]) >= 2
     assert len(results["timeline"]) >= 2
     assert len(results["conflicts"]) >= 1
-    assert results["report_markdown"].startswith("# M3 Case")
+    assert {conflict["type"] for conflict in results["conflicts"]} >= {"time", "location", "quantity"}
+    assert results["report_markdown"].startswith("**AI 辅助生成，需人工复核。**")
+    assert "# M3 Case" in results["report_markdown"]
     assert results["citation_check"]["invalid_citations"] == []
     assert results["citation_check"]["citation_coverage"] >= 0.9
 
@@ -85,7 +88,8 @@ def test_analysis_mock_flow_results_patch_download_and_rerun(client, create_user
 
     download_response = client.get(f"/api/v1/tasks/{task_id}/report/download", headers=headers)
     assert download_response.status_code == 200
-    assert download_response.text.startswith("# M3 Case")
+    assert download_response.text.startswith("**AI 辅助生成，需人工复核。**")
+    assert "# M3 Case" in download_response.text
     assert "分析报告" in unquote(download_response.headers["content-disposition"])
 
     with SessionLocal() as db:
@@ -229,3 +233,49 @@ def test_recover_interrupted_runs_marks_running_records_failed():
         assert task.last_error == "服务重启导致运行中断，请重新执行"
         assert run.status == RUN_STATUS_FAILED
         assert run.error_message == "服务重启导致运行中断，请重新执行"
+        assert run.current_step == "failed"
+
+
+def test_execute_run_exception_marks_run_failed_terminal(client, create_user, monkeypatch):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    _upload_text(client, headers, task_id)
+    with SessionLocal() as db:
+        owner = db.query(Task).filter(Task.id == task_id).one().owner
+        run = orchestrator.start_run(db, task_id, owner)
+        run_id = run.id
+
+    def fail_parse(_task_id: str):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(orchestrator.parse_service, "parse_all_files", fail_parse)
+
+    orchestrator.execute_run(task_id, run_id)
+
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        run = db.get(TaskRun, run_id)
+        assert task.status == TASK_STATUS_FAILED
+        assert task.last_error == "分析失败，请查看服务日志"
+        assert run.status == RUN_STATUS_FAILED
+        assert run.current_step == "failed"
+        assert run.error_message == "分析失败，请查看服务日志"
+
+
+def test_download_report_filename_uses_result_updated_at_and_sanitizes_task_name(client, create_user):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers, "Bad/Name:Case*?")
+    _upload_text(client, headers, task_id)
+    client.post(f"/api/v1/tasks/{task_id}/runs", headers=headers)
+    with SessionLocal() as db:
+        result = db.query(AnalysisResult).filter(AnalysisResult.task_id == task_id).one()
+        result.updated_at = datetime(2026, 6, 1, 14, 30, tzinfo=timezone.utc)
+        db.commit()
+
+    response = client.get(f"/api/v1/tasks/{task_id}/report/download", headers=headers)
+
+    assert response.status_code == 200
+    filename = unquote(response.headers["content-disposition"])
+    assert "Bad_Name_Case_分析报告_20260601_1430.md" in filename

@@ -88,3 +88,4 @@ class TaskUpdate(BaseModel):
     objective: str | None = Field(default=None, min_length=1, max_length=1000)
     description: str | None = Field(default=None, max_length=2000)
     status: str | None = None
+    force: bool = False

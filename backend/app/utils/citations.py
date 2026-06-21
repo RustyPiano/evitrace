@@ -4,7 +4,7 @@ from app.schemas_analysis import CitationCheck
 
 CITATION_RE = re.compile(r"E-\d{4}")
 SECTION_RE = re.compile(r"^##\s+", re.MULTILINE)
-CONCLUSION_HEADING = "## 五、综合分析结论"
+CONCLUSION_HEADING_RE = re.compile(r"^##\s*五、\s*综合分析结论", re.MULTILINE)
 
 
 def ordered_unique(values: list[str]) -> list[str]:
@@ -19,10 +19,10 @@ def ordered_unique(values: list[str]) -> list[str]:
 
 
 def extract_conclusion_paragraphs(markdown: str) -> list[str]:
-    start = markdown.find(CONCLUSION_HEADING)
-    if start < 0:
+    match = CONCLUSION_HEADING_RE.search(markdown)
+    if match is None:
         return []
-    body_start = start + len(CONCLUSION_HEADING)
+    body_start = match.end()
     next_match = SECTION_RE.search(markdown, body_start)
     body = markdown[body_start : next_match.start() if next_match else len(markdown)]
     return [paragraph.strip() for paragraph in re.split(r"\n\s*\n", body) if paragraph.strip()]

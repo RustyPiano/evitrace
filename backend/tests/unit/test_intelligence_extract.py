@@ -1,7 +1,8 @@
 import json
 
 from app.skills.base import SkillContext
-from app.skills.intelligence_extract import IntelligenceExtractSkill
+from app.skills.intelligence_extract import IntelligenceExtractSkill, _merge_extractions
+from app.schemas_analysis import Event, ExtractionResult
 
 
 def _context(tmp_path, task_id: str = "task-1") -> SkillContext:
@@ -116,3 +117,94 @@ def test_task_fixture_can_resolve_match_to_display_id_and_ignore_extra_fields(tm
     assert result.data["entities"][0]["evidence_ids"] == ["E-0001"]
     assert result.data["events"][0]["evidence_ids"] == ["E-0001"]
     assert "extra_field" not in result.data["events"][0]
+
+
+def test_sanitize_invalid_time_normalized_keeps_time_text_and_warns(tmp_path):
+    task_id = "task-invalid-time"
+    fixture_dir = tmp_path / "tasks" / task_id / "mock"
+    fixture_dir.mkdir(parents=True)
+    (fixture_dir / "extraction.json").write_text(
+        json.dumps(
+            {
+                "events": [
+                    {
+                        "event_key": "车队-发现-车辆",
+                        "title": "发现车辆",
+                        "time_text": "昨日傍晚",
+                        "time_normalized": "definitely-not-a-time",
+                        "location": "地点A",
+                        "evidence_ids": ["E-0001"],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    result = IntelligenceExtractSkill().run(
+        _context(tmp_path, task_id),
+        {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _evidence()},
+    )
+
+    assert result.success is True
+    assert result.data["events"][0]["time_text"] == "昨日傍晚"
+    assert result.data["events"][0]["time_normalized"] is None
+    assert result.data["timeline"][0]["time_group"] == "时间未确定"
+    assert result.warnings == ["事件时间规范化值不可解析，已置为未确定"]
+
+
+def test_real_extraction_aggregates_sanitize_warnings(monkeypatch, tmp_path):
+    class FakeClient:
+        def generate_json(self, _system, _user, _schema):
+            return ExtractionResult(
+                events=[
+                    Event(
+                        event_key="车队-发现-车辆",
+                        title="发现车辆",
+                        evidence_ids=["E-9999"],
+                    )
+                ]
+            )
+
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+
+    result = IntelligenceExtractSkill(llm_client=FakeClient()).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _evidence()},
+    )
+
+    assert result.success is True
+    assert result.data["events"] == []
+    assert result.warnings == ["事件结果因缺少有效证据引用已丢弃"]
+
+
+def test_merge_extractions_combines_evidence_ids_for_same_fact():
+    first = ExtractionResult(
+        events=[
+            Event(
+                event_key="车队-发现-车辆",
+                title="发现车辆",
+                time_normalized="2026-06-01T14:00:00",
+                location="地点A",
+                evidence_ids=["E-0001"],
+            )
+        ]
+    )
+    second = ExtractionResult(
+        events=[
+            Event(
+                event_key="车队-发现-车辆",
+                title="发现车辆",
+                time_normalized="2026-06-01T14:00:00",
+                location="地点A",
+                evidence_ids=["E-0002", "E-0001"],
+            )
+        ]
+    )
+
+    merged = _merge_extractions([first, second])
+
+    assert len(merged.events) == 1
+    assert merged.events[0].event_id == "EVT-001"
+    assert merged.events[0].evidence_ids == ["E-0001", "E-0002"]

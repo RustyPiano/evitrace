@@ -1,6 +1,6 @@
 import itertools
 import re
-from datetime import date, datetime
+from datetime import date, datetime, time, timezone
 from time import perf_counter
 from typing import Any
 
@@ -55,23 +55,62 @@ def _add_conflict(
     conflicts.append(conflict.model_dump(mode="json"))
 
 
-def _time_conflict(left: dict[str, Any], right: dict[str, Any], threshold_minutes: int) -> tuple[str, str] | None:
+def _is_aware(value: datetime) -> bool:
+    return value.tzinfo is not None and value.utcoffset() is not None
+
+
+def _as_utc_naive(value: datetime) -> datetime:
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _date_part(parsed_value: Any, kind: str) -> date | None:
+    if kind == "date" and isinstance(parsed_value, date) and not isinstance(parsed_value, datetime):
+        return parsed_value
+    if kind == "datetime" and isinstance(parsed_value, datetime):
+        return parsed_value.date()
+    return None
+
+
+def _time_minutes(value: time) -> int:
+    return value.hour * 60 + value.minute
+
+
+def _time_conflict(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    threshold_minutes: int,
+) -> tuple[tuple[str, str] | None, str | None]:
     left_time = parse_time_value(left.get("time_normalized"))
     right_time = parse_time_value(right.get("time_normalized"))
     if left_time is None or right_time is None:
-        return None
+        return None, None
 
     left_value = str(left.get("time_text") or left.get("time_normalized"))
     right_value = str(right.get("time_text") or right.get("time_normalized"))
     if left_time.kind == "date" or right_time.kind == "date":
-        left_date = left_time.value if isinstance(left_time.value, date) else left_time.value.date()
-        right_date = right_time.value if isinstance(right_time.value, date) else right_time.value.date()
-        return (left_value, right_value) if left_date != right_date else None
+        left_date = _date_part(left_time.value, left_time.kind)
+        right_date = _date_part(right_time.value, right_time.kind)
+        if left_date is None or right_date is None:
+            return None, None
+        return ((left_value, right_value), None) if left_date != right_date else (None, None)
+
+    if left_time.kind == "time" or right_time.kind == "time":
+        if isinstance(left_time.value, time) and isinstance(right_time.value, time):
+            delta_minutes = abs(_time_minutes(left_time.value) - _time_minutes(right_time.value))
+            return ((left_value, right_value), None) if delta_minutes > threshold_minutes else (None, None)
+        warning = f"{left['event_id']}/{right['event_id']} 时间缺少日期上下文，未自动判定冲突"
+        return None, warning
 
     if not isinstance(left_time.value, datetime) or not isinstance(right_time.value, datetime):
-        return None
-    delta_minutes = abs((left_time.value - right_time.value).total_seconds()) / 60
-    return (left_value, right_value) if delta_minutes > threshold_minutes else None
+        return None, None
+    left_aware = _is_aware(left_time.value)
+    right_aware = _is_aware(right_time.value)
+    if left_aware != right_aware:
+        return None, f"{left['event_id']}/{right['event_id']} 时间时区信息不一致，未自动判定冲突"
+    left_dt = _as_utc_naive(left_time.value) if left_aware else left_time.value
+    right_dt = _as_utc_naive(right_time.value) if right_aware else right_time.value
+    delta_minutes = abs((left_dt - right_dt).total_seconds()) / 60
+    return ((left_value, right_value), None) if delta_minutes > threshold_minutes else (None, None)
 
 
 def _quantity(event: dict[str, Any]) -> tuple[float, str] | None:
@@ -106,7 +145,9 @@ def detect_conflicts(
         if len(group) < 2:
             continue
         for left, right in itertools.combinations(group, 2):
-            time_values = _time_conflict(left, right, threshold)
+            time_values, time_warning = _time_conflict(left, right, threshold)
+            if time_warning is not None:
+                warnings.append(time_warning)
             if time_values is not None:
                 _add_conflict(
                     conflicts,

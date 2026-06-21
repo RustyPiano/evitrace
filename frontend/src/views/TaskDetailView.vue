@@ -406,7 +406,7 @@ function startPolling() {
       parsing.value = false;
       stopPolling();
     }
-  }, 1500);
+  }, 2000);
 }
 
 function stopPolling() {

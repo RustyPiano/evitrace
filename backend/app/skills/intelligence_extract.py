@@ -3,10 +3,12 @@ import unicodedata
 from pathlib import Path
 from time import perf_counter
 from typing import Any
+from datetime import date, datetime, time, timezone
 
 from app.config import settings
 from app.schemas_analysis import Entity, Event, ExtractionResult, TimelineItem
 from app.services.llm_client import LocalLLMClient
+from app.utils.time_normalize import ParsedTime, parse_time_value
 
 from .base import SkillContext, SkillManifest, SkillResult
 
@@ -170,6 +172,9 @@ def _sanitize_extraction(raw: dict[str, Any], evidence_items: list[dict[str, Any
         if not normalized["evidence_ids"]:
             warnings.append("事件结果因缺少有效证据引用已丢弃")
             continue
+        if normalized.get("time_normalized") and parse_time_value(str(normalized["time_normalized"])) is None:
+            normalized["time_normalized"] = None
+            warnings.append("事件时间规范化值不可解析，已置为未确定")
         normalized.pop("event_id", None)
         try:
             events.append(Event.model_validate(normalized))
@@ -182,7 +187,7 @@ def _sanitize_extraction(raw: dict[str, Any], evidence_items: list[dict[str, Any
 def _merge_extractions(extractions: list[ExtractionResult]) -> ExtractionResult:
     entity_keys: set[tuple[str, str]] = set()
     entities: list[Entity] = []
-    event_keys: set[tuple[str, tuple[str, ...]]] = set()
+    event_by_key: dict[tuple[str, tuple[str, str, str]], Event] = {}
     events: list[Event] = []
 
     for extraction in extractions:
@@ -199,22 +204,43 @@ def _merge_extractions(extractions: list[ExtractionResult]) -> ExtractionResult:
                 _normalize_key(event.location),
                 event.quantity.model_dump_json() if event.quantity else "",
             )
-            key = (_normalize_key(event.event_key), tuple(sorted(event.evidence_ids)), fact_key)
-            if key in event_keys:
+            key = (_normalize_key(event.event_key), fact_key)
+            existing = event_by_key.get(key)
+            if existing is not None:
+                for evidence_id in event.evidence_ids:
+                    if evidence_id not in existing.evidence_ids:
+                        existing.evidence_ids.append(evidence_id)
                 continue
-            event_keys.add(key)
             event.event_id = f"EVT-{len(events) + 1:03d}"
+            event_by_key[key] = event
             events.append(event)
 
     return ExtractionResult(entities=entities, events=events)
 
 
+def _timeline_sort_key(parsed: ParsedTime) -> datetime:
+    value = parsed.value
+    if isinstance(value, datetime):
+        if value.tzinfo is not None and value.utcoffset() is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, time.min)
+    return datetime.combine(date.min, value)
+
+
 def build_timeline(events: list[Event]) -> list[TimelineItem]:
-    dated = [event for event in events if event.time_normalized]
-    undated = [event for event in events if not event.time_normalized]
-    dated.sort(key=lambda event: event.time_normalized or "")
+    dated: list[tuple[Event, ParsedTime]] = []
+    undated: list[Event] = []
+    for event in events:
+        parsed = parse_time_value(event.time_normalized)
+        if parsed is None:
+            undated.append(event)
+        else:
+            dated.append((event, parsed))
+    dated.sort(key=lambda item: _timeline_sort_key(item[1]))
     timeline: list[TimelineItem] = []
-    for event in dated + undated:
+    for event in [item[0] for item in dated] + undated:
         timeline.append(
             TimelineItem(
                 event_id=event.event_id or "",
@@ -258,7 +284,8 @@ class IntelligenceExtractSkill:
                 extraction, sanitize_warnings = _sanitize_extraction(raw, evidence_items)
                 warnings.extend(sanitize_warnings)
             else:
-                extraction = self._run_real_extraction(payload, evidence_items)
+                extraction, real_warnings = self._run_real_extraction(payload, evidence_items)
+                warnings.extend(real_warnings)
         except Exception as exc:
             return SkillResult(
                 success=False,
@@ -284,7 +311,7 @@ class IntelligenceExtractSkill:
             },
         )
 
-    def _run_real_extraction(self, payload: Any, evidence_items: list[dict[str, Any]]) -> ExtractionResult:
+    def _run_real_extraction(self, payload: Any, evidence_items: list[dict[str, Any]]) -> tuple[ExtractionResult, list[str]]:
         client = self.llm_client or LocalLLMClient()
         task = payload.get("task") or {}
         system_prompt = (
@@ -292,6 +319,7 @@ class IntelligenceExtractSkill:
             "不输出行动建议；不合并明显冲突事实；严格输出符合 schema 的 JSON。"
         )
         extractions: list[ExtractionResult] = []
+        warnings: list[str] = []
         for batch in _batch_evidence(evidence_items):
             user_prompt = "\n".join(
                 [
@@ -302,6 +330,7 @@ class IntelligenceExtractSkill:
             )
             result = client.generate_json(system_prompt, user_prompt, ExtractionResult)
             raw = result.model_dump(mode="json")
-            sanitized, _ = _sanitize_extraction(raw, batch)
+            sanitized, sanitize_warnings = _sanitize_extraction(raw, batch)
+            warnings.extend(sanitize_warnings)
             extractions.append(sanitized)
-        return _merge_extractions(extractions)
+        return _merge_extractions(extractions), warnings

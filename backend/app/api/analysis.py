@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -18,6 +19,7 @@ from app.skills.base import SkillContext
 from app.skills.report_generate import ReportGenerateSkill, write_latest_report
 
 router = APIRouter(tags=["analysis"])
+UNSAFE_FILENAME_RE = re.compile(r"[\\/:*?\"<>|\s]+")
 
 
 def _loads(value: str, default):
@@ -29,6 +31,12 @@ def _loads(value: str, default):
 
 def _dumps(value) -> str:
     return json.dumps(value, ensure_ascii=False)
+
+
+def _safe_filename_part(value: str | None) -> str:
+    cleaned = UNSAFE_FILENAME_RE.sub("_", str(value or "").strip())
+    cleaned = re.sub(r"_+", "_", cleaned).strip("._")
+    return cleaned or "未命名任务"
 
 
 def _analysis_result(db: Session, task_id: str, current_user: User) -> tuple[Task, AnalysisResult]:
@@ -182,8 +190,9 @@ def download_report(
         context = SkillContext(task_id=task.id, run_id=result.run_id, data_root=str(settings.data_root_path))
         write_latest_report(context, result.report_markdown)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    filename = f"{task.name}_分析报告_{timestamp}.md"
+    report_time = result.updated_at or result.created_at or datetime.now()
+    timestamp = report_time.strftime("%Y%m%d_%H%M")
+    filename = f"{_safe_filename_part(task.name)}_分析报告_{timestamp}.md"
     quoted = quote(filename)
     headers = {"Content-Disposition": f"attachment; filename*=UTF-8''{quoted}"}
     return FileResponse(report_path, media_type="text/markdown; charset=utf-8", headers=headers)

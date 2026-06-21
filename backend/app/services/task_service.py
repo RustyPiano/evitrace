@@ -1,3 +1,4 @@
+import json
 import shutil
 from datetime import datetime
 from typing import Any
@@ -103,6 +104,37 @@ def serialize_task_detail(db: Session, task: Task) -> dict[str, Any]:
     return summary
 
 
+def _json_load(value: str, default: Any) -> Any:
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return default
+
+
+def _validate_completion_gate(db: Session, task: Task, current_user: User, force: bool) -> None:
+    result = db.query(AnalysisResult).filter(AnalysisResult.task_id == task.id).first()
+    if result is None:
+        raise AppError("CITATION_CHECK_REQUIRED", "缺少引用校验结果，无法完成任务", status.HTTP_409_CONFLICT)
+    citation_check = _json_load(result.citation_check_json, {})
+    if not isinstance(citation_check, dict):
+        raise AppError("CITATION_CHECK_REQUIRED", "引用校验结果无效，无法完成任务", status.HTTP_409_CONFLICT)
+
+    invalid_citations = citation_check.get("invalid_citations")
+    if isinstance(invalid_citations, list) and invalid_citations:
+        raise AppError("INVALID_CITATIONS_PRESENT", "报告存在无效证据引用，无法完成任务", status.HTTP_409_CONFLICT)
+
+    try:
+        coverage = float(citation_check.get("citation_coverage", 0))
+    except (TypeError, ValueError):
+        coverage = 0
+    if coverage < 0.9 and not (current_user.role == ROLE_ADMIN and force):
+        raise AppError(
+            "CITATION_COVERAGE_TOO_LOW",
+            "综合分析结论引用覆盖率低于 0.90，需管理员强制完成",
+            status.HTTP_409_CONFLICT,
+        )
+
+
 def list_tasks(db: Session, current_user: User) -> list[dict[str, Any]]:
     query = db.query(Task).order_by(Task.updated_at.desc())
     if current_user.role != ROLE_ADMIN:
@@ -159,6 +191,7 @@ def update_task(
                 "仅允许 awaiting_review 任务标记为 completed",
                 status.HTTP_409_CONFLICT,
             )
+        _validate_completion_gate(db, task, current_user, payload.force)
         task.status = TASK_STATUS_COMPLETED
 
     db.commit()

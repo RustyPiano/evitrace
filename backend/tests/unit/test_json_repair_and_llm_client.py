@@ -101,3 +101,33 @@ def test_generate_json_raises_model_unavailable_when_transport_fails():
     assert exc_info.value.code == "LOCAL_MODEL_UNAVAILABLE"
     assert exc_info.value.http_status == 503
     assert len(calls) == 2
+
+
+def test_generate_json_retries_response_json_parse_errors():
+    calls: list[int] = []
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(200, content=b"not-json")
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"value":"ok"}'}}]})
+
+    client = LocalLLMClient(
+        mock_ai=False,
+        base_url="http://local-llm/v1",
+        api_key="test-key",
+        model="test-model",
+        max_retries=2,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    result = client.generate_json("system", "user", SamplePayload)
+
+    assert result == SamplePayload(value="ok")
+    assert len(calls) == 2
+
+
+def test_llm_max_retries_is_capped_at_two():
+    client = LocalLLMClient(mock_ai=True, max_retries=99)
+
+    assert client.max_retries == 2

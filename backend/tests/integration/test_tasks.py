@@ -1,3 +1,5 @@
+import json
+
 from app.config import settings
 from app.database import SessionLocal
 from app.models import AnalysisResult, AuditLog, Evidence, Task, TaskFile, TaskRun, User
@@ -27,6 +29,27 @@ def _create_task(client, headers) -> str:
     )
     assert response.status_code == 201
     return response.json()["data"]["id"]
+
+
+def _mark_awaiting_review_with_citation_check(task_id: str, citation_check: dict) -> None:
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        task.status = "awaiting_review"
+        run = TaskRun(task_id=task_id, status="succeeded")
+        db.add(run)
+        db.flush()
+        db.add(
+            AnalysisResult(
+                task_id=task_id,
+                run_id=run.id,
+                entities_json="[]",
+                events_json="[]",
+                timeline_json="[]",
+                conflicts_json="[]",
+                citation_check_json=json.dumps(citation_check),
+            )
+        )
+        db.commit()
 
 
 def _upload_text_file(client, headers, task_id: str) -> str:
@@ -119,10 +142,10 @@ def test_completing_task_from_awaiting_review_succeeds(client, create_user):
     create_user("alice")
     headers = login_headers(client, "alice", "password")
     task_id = _create_task(client, headers)
-    with SessionLocal() as db:
-        task = db.get(Task, task_id)
-        task.status = "awaiting_review"
-        db.commit()
+    _mark_awaiting_review_with_citation_check(
+        task_id,
+        {"invalid_citations": [], "citation_coverage": 0.9},
+    )
 
     response = client.patch(
         f"/api/v1/tasks/{task_id}",
@@ -132,6 +155,59 @@ def test_completing_task_from_awaiting_review_succeeds(client, create_user):
 
     assert response.status_code == 200
     assert response.json()["data"]["status"] == "completed"
+
+
+def test_completing_task_rejects_low_citation_coverage_for_analyst(client, create_user):
+    create_user("alice")
+    headers = login_headers(client, "alice", "password")
+    task_id = _create_task(client, headers)
+    _mark_awaiting_review_with_citation_check(
+        task_id,
+        {"invalid_citations": [], "citation_coverage": 0.5},
+    )
+
+    response = client.patch(
+        f"/api/v1/tasks/{task_id}",
+        headers=headers,
+        json={"status": "completed"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "CITATION_COVERAGE_TOO_LOW"
+
+
+def test_completing_task_allows_admin_force_for_low_citation_coverage(client, create_user):
+    task_id = _create_task(client, login_headers(client, "admin", "admin-password"))
+    _mark_awaiting_review_with_citation_check(
+        task_id,
+        {"invalid_citations": [], "citation_coverage": 0.5},
+    )
+
+    response = client.patch(
+        f"/api/v1/tasks/{task_id}",
+        headers=login_headers(client, "admin", "admin-password"),
+        json={"status": "completed", "force": True},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["status"] == "completed"
+
+
+def test_completing_task_rejects_invalid_citations_even_for_admin_force(client, create_user):
+    task_id = _create_task(client, login_headers(client, "admin", "admin-password"))
+    _mark_awaiting_review_with_citation_check(
+        task_id,
+        {"invalid_citations": ["E-9999"], "citation_coverage": 1.0},
+    )
+
+    response = client.patch(
+        f"/api/v1/tasks/{task_id}",
+        headers=login_headers(client, "admin", "admin-password"),
+        json={"status": "completed", "force": True},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "INVALID_CITATIONS_PRESENT"
 
 
 def test_delete_task_cascades_business_records_keeps_audit_logs_and_removes_directory(
