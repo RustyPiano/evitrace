@@ -11,64 +11,21 @@ from app.models import SkillConfig
 from app.schemas import AppError
 
 from .audio_transcribe import AudioTranscribeSkill, resolve_asr_model_path
-from .base import SkillManifest, SkillResult
+from .conflict_detect import ConflictDetectSkill
 from .document_parse import DocumentParseSkill
 from .image_ocr import ImageOcrSkill, resolve_ocr_model_dirs
+from .intelligence_extract import IntelligenceExtractSkill
+from .report_generate import ReportGenerateSkill
 from .video_parse import VideoParseSkill
-
-
-class PlaceholderSkill:
-    def __init__(self, manifest: SkillManifest) -> None:
-        self.manifest = manifest
-
-    def run(self, context: Any, payload: Any) -> SkillResult:
-        return SkillResult(
-            success=False,
-            errors=[f"{self.manifest.id} 属于 M3，M2 不执行"],
-            data=None,
-        )
 
 
 document_parse = DocumentParseSkill()
 image_ocr = ImageOcrSkill()
 audio_transcribe = AudioTranscribeSkill()
 video_parse = VideoParseSkill()
-intelligence_extract = PlaceholderSkill(
-    SkillManifest(
-        id="intelligence_extract",
-        name="要素事件提取",
-        version="1.0.0",
-        description="从证据列表提取实体、事件和时间线",
-        enabled_by_default=True,
-        required=True,
-        input_types=["evidence_list"],
-        output_type="analysis_entities_events",
-    )
-)
-conflict_detect = PlaceholderSkill(
-    SkillManifest(
-        id="conflict_detect",
-        name="冲突检测",
-        version="1.0.0",
-        description="检测时间、地点和数量冲突",
-        enabled_by_default=True,
-        required=True,
-        input_types=["events"],
-        output_type="conflict_list",
-    )
-)
-report_generate = PlaceholderSkill(
-    SkillManifest(
-        id="report_generate",
-        name="报告生成与引用验证",
-        version="1.0.0",
-        description="生成 Markdown 报告并验证证据引用",
-        enabled_by_default=True,
-        required=True,
-        input_types=["analysis_results"],
-        output_type="report_markdown",
-    )
-)
+intelligence_extract = IntelligenceExtractSkill()
+conflict_detect = ConflictDetectSkill()
+report_generate = ReportGenerateSkill()
 
 SKILL_REGISTRY = {
     "document_parse": document_parse,
@@ -197,6 +154,12 @@ def check_skill_health(db: Session, skill_id: str) -> dict[str, Any]:
             resolve_asr_model_path()
             _require_import("paddleocr")
             _require_import("faster_whisper")
+        elif skill_id in {"intelligence_extract", "report_generate"} and not settings.mock_ai:
+            from app.services.llm_client import ping_local_llm
+
+            health = ping_local_llm()
+            if health.get("status") != "healthy":
+                raise RuntimeError(health.get("message") or health.get("code") or "local llm unavailable")
         config.last_status = SKILL_STATUS_HEALTHY
         config.last_error = None
     except Exception as exc:

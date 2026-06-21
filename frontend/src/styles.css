@@ -206,6 +206,81 @@ textarea {
   align-items: start;
 }
 
+.analysis-run-panel {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #f9fafb;
+}
+
+.run-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  color: #4b5563;
+  font-size: 13px;
+}
+
+.warning-list {
+  padding-left: 18px;
+  margin: 6px 0 0;
+}
+
+.analysis-results {
+  margin-top: 10px;
+}
+
+.citation-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.report-markdown {
+  max-height: 520px;
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #111827;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.report-markdown h1,
+.report-markdown h2,
+.report-markdown h3,
+.report-markdown p {
+  margin: 0 0 12px;
+}
+
+.report-markdown h1 {
+  font-size: 20px;
+}
+
+.report-markdown h2 {
+  padding-top: 8px;
+  font-size: 16px;
+}
+
+.report-markdown h3 {
+  font-size: 15px;
+}
+
+.report-markdown ul {
+  padding-left: 20px;
+  margin: 0 0 12px;
+}
+
+.citation {
+  color: #2563eb;
+  font-weight: 700;
+}
+
 .evidence-main {
   min-width: 0;
 }

@@ -9,11 +9,12 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from .api import admin, auth, evidence, files, tasks
+from .api import admin, analysis, auth, evidence, files, tasks
 from .config import settings
 from .database import SessionLocal, initialize_database
 from .schemas import AppError, ErrorDetail, ErrorResponse
 from .services.auth_service import seed_default_admin
+from .services.orchestrator import recover_interrupted_runs
 from .skills.registry import sync_skill_configs
 
 API_PREFIX = "/api/v1"
@@ -27,6 +28,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     with SessionLocal() as db:
         seed_default_admin(db)
         sync_skill_configs(db)
+    recover_interrupted_runs()
     yield
 
 
@@ -63,6 +65,7 @@ def create_app() -> FastAPI:
     api_router.include_router(tasks.router)
     api_router.include_router(files.router)
     api_router.include_router(evidence.router)
+    api_router.include_router(analysis.router)
     api_router.include_router(admin.router)
 
     app.include_router(api_router)

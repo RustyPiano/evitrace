@@ -8,3 +8,4 @@ node_modules/
 venv/
 dist/
 .DS_Store
+.claude/
