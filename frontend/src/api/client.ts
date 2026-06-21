@@ -23,6 +23,9 @@ apiClient.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       useAuthStore().clearToken();
+      if (window.location.pathname !== "/login") {
+        window.location.assign("/login");
+      }
     }
 
     return Promise.reject(error);

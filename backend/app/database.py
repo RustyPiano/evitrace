@@ -40,6 +40,8 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
 def initialize_database() -> None:
+    from . import models  # noqa: F401
+
     _ensure_data_paths()
     with engine.begin() as connection:
         Base.metadata.create_all(bind=connection)

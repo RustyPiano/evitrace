@@ -9,9 +9,12 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from .api import admin, auth, files, tasks
 from .config import settings
-from .database import initialize_database
+from .database import SessionLocal, initialize_database
 from .schemas import AppError, ErrorDetail, ErrorResponse
+from .services.auth_service import seed_default_admin
+from .skills.registry import sync_skill_configs
 
 API_PREFIX = "/api/v1"
 INTERNAL_ERROR_MESSAGE = "服务器内部错误，请稍后重试"
@@ -21,6 +24,9 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     initialize_database()
+    with SessionLocal() as db:
+        seed_default_admin(db)
+        sync_skill_configs(db)
     yield
 
 
@@ -53,6 +59,11 @@ def create_app() -> FastAPI:
             "message": "ok",
         }
 
+    api_router.include_router(auth.router)
+    api_router.include_router(tasks.router)
+    api_router.include_router(files.router)
+    api_router.include_router(admin.router)
+
     app.include_router(api_router)
 
     @app.exception_handler(AppError)
@@ -66,7 +77,7 @@ def create_app() -> FastAPI:
         return _error_response(
             "VALIDATION_ERROR",
             str(exc),
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
 
     @app.exception_handler(StarletteHTTPException)
