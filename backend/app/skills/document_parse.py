@@ -132,6 +132,7 @@ class DocumentParseSkill:
         with fitz.open(path) as document:
             for page_index, page in enumerate(document, start=1):
                 text = page.get_text("text")
+                # PDF offsets are page-relative; TXT/MD offsets are full-document offsets.
                 for content, start, end in _chunk_text(text):
                     items.append(_evidence(content, page_index, None, start, end))
 

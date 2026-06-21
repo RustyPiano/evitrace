@@ -1,4 +1,5 @@
 import json
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -55,7 +56,15 @@ def sidecar_fixture(
         if not path.is_relative_to(task_directory(context)):
             continue
         if path.is_file():
-            return json.loads(path.read_text(encoding="utf-8"))
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                warnings.warn(
+                    f"Invalid mock fixture ignored: {path}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                return None
     return None
 
 

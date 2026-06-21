@@ -42,3 +42,19 @@ def test_development_warns_for_default_credentials(capsys):
     assert "WARNING" in captured.err
     assert "SECRET_KEY" in captured.err
     assert "FIRST_ADMIN_PASSWORD" in captured.err
+
+
+def test_local_model_and_ffmpeg_timeout_settings_are_configurable():
+    settings = Settings(
+        SECRET_KEY="x" * 32,
+        FIRST_ADMIN_PASSWORD="not-default-admin-password",
+        OCR_MODEL_DIR="/models/ocr",
+        ASR_MODEL_DIR="/models/asr",
+        ASR_MODEL_SIZE="small",
+        FFMPEG_TIMEOUT_SEC=30,
+    )
+
+    assert settings.ocr_model_dir == "/models/ocr"
+    assert settings.asr_model_dir == "/models/asr"
+    assert settings.asr_model_size == "small"
+    assert settings.ffmpeg_timeout_sec == 30

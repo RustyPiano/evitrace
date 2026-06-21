@@ -10,10 +10,10 @@ from app.constants import SKILL_STATUS_ERROR, SKILL_STATUS_HEALTHY, SKILL_STATUS
 from app.models import SkillConfig
 from app.schemas import AppError
 
-from .audio_transcribe import AudioTranscribeSkill
+from .audio_transcribe import AudioTranscribeSkill, resolve_asr_model_path
 from .base import SkillManifest, SkillResult
 from .document_parse import DocumentParseSkill
-from .image_ocr import ImageOcrSkill
+from .image_ocr import ImageOcrSkill, resolve_ocr_model_dirs
 from .video_parse import VideoParseSkill
 
 
@@ -185,12 +185,16 @@ def check_skill_health(db: Session, skill_id: str) -> dict[str, Any]:
             _require_import("docx")
             _require_import("charset_normalizer")
         elif skill_id == "image_ocr" and not settings.mock_ai:
+            resolve_ocr_model_dirs()
             _require_import("paddleocr")
         elif skill_id == "audio_transcribe" and not settings.mock_ai:
+            resolve_asr_model_path()
             _require_import("faster_whisper")
         elif skill_id == "video_parse" and not settings.mock_ai:
             if shutil.which("ffmpeg") is None:
                 raise RuntimeError("missing executable: ffmpeg")
+            resolve_ocr_model_dirs()
+            resolve_asr_model_path()
             _require_import("paddleocr")
             _require_import("faster_whisper")
         config.last_status = SKILL_STATUS_HEALTHY

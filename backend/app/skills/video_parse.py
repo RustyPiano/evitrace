@@ -13,6 +13,10 @@ NO_VIDEO_AUDIO_WARNING = "视频音轨未识别到语音文本"
 NO_FRAME_TEXT_WARNING = "视频关键帧 OCR 未识别到文本"
 
 
+class FfmpegTimeoutError(RuntimeError):
+    pass
+
+
 def _write_placeholder_frame(context: SkillContext, file_info: dict[str, Any], index: int) -> str:
     frames_dir = ensure_derived_dir(context, "frames")
     filename = f"{file_info['id']}_mock_frame_{index:06d}.png"
@@ -91,11 +95,10 @@ def mock_video_evidence(context: SkillContext, file_info: dict[str, Any]) -> tup
                     )
         audio_warnings = [] if audio_evidence else [NO_VIDEO_AUDIO_WARNING]
 
-    raw_frames = _default_frame_items()
-    if fixture is not None:
-        fixture_frames = coerce_items(fixture, ("frame_ocr", "frames", "items"))
-        if fixture_frames:
-            raw_frames = fixture_frames
+    if fixture is None:
+        raw_frames = _default_frame_items()
+    else:
+        raw_frames = coerce_items(fixture, ("frame_ocr", "frames", "items"))
 
     frame_evidence: list[dict] = []
     for index, raw in enumerate(raw_frames):
@@ -110,10 +113,19 @@ def mock_video_evidence(context: SkillContext, file_info: dict[str, Any]) -> tup
     return audio_evidence + frame_evidence, warnings
 
 
-def _run_ffmpeg(command: list[str]) -> None:
+def _run_ffmpeg(command: list[str], *, timeout: int) -> None:
     import subprocess
 
-    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise FfmpegTimeoutError(f"ffmpeg timed out after {timeout}s") from exc
     if completed.returncode != 0:
         raise RuntimeError(completed.stderr.strip() or "ffmpeg failed")
 
@@ -128,15 +140,25 @@ def real_video_evidence(context: SkillContext, file_info: dict[str, Any]) -> tup
     audio_dir = ensure_derived_dir(context, "audio")
     frames_dir = ensure_derived_dir(context, "frames")
     audio_path = audio_dir / f"{file_info['id']}.wav"
-    _run_ffmpeg(["ffmpeg", "-y", "-i", str(source), "-vn", "-ac", "1", "-ar", "16000", str(audio_path)])
-
-    evidence, warnings = real_transcript_evidence(
-        audio_path,
-        modality="video",
-        locator_kind="video_audio",
-    )
-    if warnings:
-        warnings = [NO_VIDEO_AUDIO_WARNING]
+    evidence: list[dict] = []
+    warnings: list[str] = []
+    try:
+        _run_ffmpeg(
+            ["ffmpeg", "-y", "-i", str(source), "-vn", "-ac", "1", "-ar", "16000", str(audio_path)],
+            timeout=settings.ffmpeg_timeout_sec,
+        )
+    except FfmpegTimeoutError:
+        raise
+    except RuntimeError:
+        warnings.append(NO_VIDEO_AUDIO_WARNING)
+    else:
+        evidence, audio_warnings = real_transcript_evidence(
+            audio_path,
+            modality="video",
+            locator_kind="video_audio",
+        )
+        if audio_warnings:
+            warnings.append(NO_VIDEO_AUDIO_WARNING)
 
     frame_pattern = frames_dir / f"{file_info['id']}_frame_%06d.png"
     interval = max(settings.video_frame_interval_sec, 1)
@@ -149,7 +171,8 @@ def real_video_evidence(context: SkillContext, file_info: dict[str, Any]) -> tup
             "-vf",
             f"fps=1/{interval}",
             str(frame_pattern),
-        ]
+        ],
+        timeout=settings.ffmpeg_timeout_sec,
     )
 
     frame_evidence: list[dict] = []

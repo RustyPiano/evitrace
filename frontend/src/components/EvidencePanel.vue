@@ -43,6 +43,12 @@
         @loadedmetadata="seekToLocator"
       />
     </template>
+    <el-alert
+      v-else-if="loadError"
+      :title="loadError.title"
+      :type="loadError.type"
+      :closable="false"
+    />
     <el-alert v-else title="证据不存在或无权访问" type="warning" :closable="false" />
   </aside>
 </template>
@@ -85,6 +91,7 @@ const loading = ref(false);
 const mediaUrl = ref<string | null>(null);
 const frameUrl = ref<string | null>(null);
 const mediaRef = ref<HTMLMediaElement | null>(null);
+const loadError = ref<{ title: string; type: "warning" | "error" } | null>(null);
 
 const mediaKind = computed(() => {
   if (!evidence.value) {
@@ -138,6 +145,7 @@ watch(
     releaseObjectUrls();
     evidence.value = null;
     source.value = null;
+    loadError.value = null;
     if (!id) {
       return;
     }
@@ -152,6 +160,8 @@ watch(
       await loadPreviewAssets();
       await nextTick();
       seekToLocator();
+    } catch (error) {
+      loadError.value = classifyLoadError(error);
     } finally {
       loading.value = false;
     }
@@ -207,6 +217,16 @@ function releaseObjectUrls() {
   }
   mediaUrl.value = null;
   frameUrl.value = null;
+}
+
+function classifyLoadError(error: unknown): { title: string; type: "warning" | "error" } {
+  if (typeof error === "object" && error !== null && "response" in error) {
+    const response = (error as { response?: { status?: number } }).response;
+    if (response?.status === 403 || response?.status === 404) {
+      return { title: "证据不存在或无权访问", type: "warning" };
+    }
+  }
+  return { title: "证据加载失败，请稍后重试", type: "error" };
 }
 
 function formatMs(value: number): string {

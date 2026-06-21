@@ -2,7 +2,7 @@ from io import BytesIO
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import Evidence, SkillConfig, Task, TaskFile
+from app.models import Evidence, SkillConfig, Task, TaskFile, TaskRun
 from app.services import parse_service
 
 from tests.conftest import login_headers
@@ -148,6 +148,68 @@ def test_corrupt_document_marks_file_failed_without_blocking_other_files(client,
         assert db.query(Evidence).filter(Evidence.file_id == files["note.txt"].id).count() == 1
 
 
+def test_parse_all_files_does_not_finalize_task_or_run_when_file_fails(client, create_user):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    response = client.post(
+        f"/api/v1/tasks/{task_id}/files",
+        headers=headers,
+        files=[
+            ("files", ("broken.pdf", b"%PDF-1.4\nbroken", "application/pdf")),
+            ("files", ("note.txt", b"good text", "text/plain")),
+        ],
+    )
+    assert response.status_code == 201
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        task.status = "extracting"
+        run = TaskRun(task_id=task_id, status="running", progress=7, current_step="parsing")
+        db.add(run)
+        db.commit()
+        run_id = run.id
+
+    summary = parse_service.parse_all_files(task_id, run_id=run_id)
+
+    assert summary.failed_files == 1
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        run = db.get(TaskRun, run_id)
+        assert task.status == "extracting"
+        assert run.status == "running"
+        assert run.progress == 100
+        assert run.error_message is None
+
+
+def test_reparse_cleans_only_current_file_derived_artifacts(client, create_user):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    [video_file] = client.post(
+        f"/api/v1/tasks/{task_id}/files",
+        headers=headers,
+        files=[("files", ("clip.mp4", b"\x00\x00\x00\x18ftypmp42", "video/mp4"))],
+    ).json()["data"]
+    task_dir = settings.data_root_path / "tasks" / task_id
+    frames_dir = task_dir / "derived" / "frames"
+    audio_dir = task_dir / "derived" / "audio"
+    frames_dir.mkdir(parents=True)
+    audio_dir.mkdir(parents=True)
+    old_frame = frames_dir / f"{video_file['id']}_frame_999999.png"
+    other_frame = frames_dir / "unrelated_file_frame_999999.png"
+    old_audio = audio_dir / f"{video_file['id']}.wav"
+    other_audio = audio_dir / "unrelated_file.wav"
+    for path in [old_frame, other_frame, old_audio, other_audio]:
+        path.write_bytes(b"old")
+
+    parse_service.parse_all_files(task_id)
+
+    assert not old_frame.exists()
+    assert not old_audio.exists()
+    assert other_frame.exists()
+    assert other_audio.exists()
+
+
 def test_parse_endpoint_rejects_running_task(client, create_user):
     create_user("owner")
     headers = login_headers(client, "owner", "password")
@@ -168,6 +230,46 @@ def test_parse_endpoint_rejects_running_task(client, create_user):
         db.commit()
 
     response = client.post(f"/api/v1/tasks/{task_id}/parse", headers=headers)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "TASK_ALREADY_RUNNING"
+
+
+def test_parse_endpoint_rejects_when_another_task_is_running(client, create_user):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    running_task_id = _create_task(client, headers)
+    waiting_task_id = _create_task(client, headers)
+    client.post(
+        f"/api/v1/tasks/{waiting_task_id}/files",
+        headers=headers,
+        files=[("files", ("note.txt", b"ready", "text/plain"))],
+    )
+    with SessionLocal() as db:
+        db.get(Task, running_task_id).status = "detecting_conflicts"
+        db.commit()
+
+    response = client.post(f"/api/v1/tasks/{waiting_task_id}/parse", headers=headers)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "TASK_ALREADY_RUNNING"
+
+
+def test_parse_endpoint_rejects_when_any_task_run_is_running(client, create_user):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    running_task_id = _create_task(client, headers)
+    waiting_task_id = _create_task(client, headers)
+    client.post(
+        f"/api/v1/tasks/{waiting_task_id}/files",
+        headers=headers,
+        files=[("files", ("note.txt", b"ready", "text/plain"))],
+    )
+    with SessionLocal() as db:
+        db.add(TaskRun(task_id=running_task_id, status="running"))
+        db.commit()
+
+    response = client.post(f"/api/v1/tasks/{waiting_task_id}/parse", headers=headers)
 
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "TASK_ALREADY_RUNNING"

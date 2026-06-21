@@ -355,9 +355,9 @@ class SkillResult(BaseModel):
 
 **测试**：
 
-- [ ] 注册表包含 7 个 Skill；
-- [ ] 停用非必需 Skill 后不执行；
-- [ ] required Skill 停用请求被拒绝。
+- [x] 注册表包含 7 个 Skill；
+- [x] 停用非必需 Skill 后不执行；
+- [x] required Skill 停用请求被拒绝。
 
 ### M2-02 证据服务
 
@@ -374,9 +374,9 @@ class SkillResult(BaseModel):
 
 **测试**：
 
-- [ ] display_id 从 E-0001 开始递增；
-- [ ] 并发不作为首版目标，但单任务不会重复；
-- [ ] 证据只能被任务 owner/admin 查询。
+- [x] display_id 从 E-0001 开始递增；
+- [x] 并发不作为首版目标，但单任务不会重复；
+- [x] 证据只能被任务 owner/admin 查询。
 
 ### M2-03 文档解析 Skill
 
@@ -399,10 +399,10 @@ class SkillResult(BaseModel):
 
 **测试**：
 
-- [ ] 证据内容正确；
-- [ ] PDF 页码正确；
-- [ ] 空段落不保存；
-- [ ] 损坏文件标记 failed，不抛出未捕获异常。
+- [x] 证据内容正确；
+- [x] PDF 页码正确；
+- [x] 空段落不保存；
+- [x] 损坏文件标记 failed，不抛出未捕获异常。
 
 ### M2-04 图片 OCR Skill
 
@@ -417,9 +417,9 @@ class SkillResult(BaseModel):
 
 **测试**：
 
-- [ ] 含文字图片至少生成一条证据；
-- [ ] locator 有 bbox；
-- [ ] 无文字图片不会伪造内容。
+- [x] 含文字图片至少生成一条证据；
+- [x] locator 有 bbox；
+- [x] 无文字图片不会伪造内容。
 
 ### M2-05 音频转写 Skill
 
@@ -434,9 +434,9 @@ class SkillResult(BaseModel):
 
 **测试**：
 
-- [ ] 证据 start_ms/end_ms 正确；
-- [ ] 点击时间定位所需数据完整；
-- [ ] 无语音文件返回 warning。
+- [x] 证据 start_ms/end_ms 正确；
+- [x] 点击时间定位所需数据完整；
+- [x] 无语音文件返回 warning。
 
 ### M2-06 视频解析 Skill
 
@@ -453,10 +453,10 @@ class SkillResult(BaseModel):
 
 **测试**：
 
-- [ ] 短视频能生成音轨或帧证据；
-- [ ] frame_path 只能位于任务目录；
-- [ ] 无音轨视频仍可抽帧；
-- [ ] FFmpeg 缺失时错误明确。
+- [x] 短视频能生成音轨或帧证据；
+- [x] frame_path 只能位于任务目录；
+- [x] 无音轨视频仍可抽帧；
+- [x] FFmpeg 缺失时错误明确。
 
 ### M2-07 文件解析编排
 
@@ -472,9 +472,9 @@ class SkillResult(BaseModel):
 
 **验收**：
 
-- [ ] 混合上传 5 类文件可运行；
-- [ ] 至少一种文件故障时其他证据仍生成；
-- [ ] 文件状态和 warning 在前端可见。
+- [x] 混合上传 5 类文件可运行；
+- [x] 至少一种文件故障时其他证据仍生成；
+- [x] 文件状态和 warning 在前端可见。
 
 ### M2-08 证据 UI
 
@@ -490,9 +490,9 @@ class SkillResult(BaseModel):
 
 **验收**：
 
-- [ ] 点击证据后右栏变化；
-- [ ] 音视频从相应秒数播放；
-- [ ] 无权文件 URL 不可直接访问。
+- [x] 点击证据后右栏变化；
+- [x] 音视频从相应秒数播放；
+- [x] 无权文件 URL 不可直接访问。
 
 ---
 

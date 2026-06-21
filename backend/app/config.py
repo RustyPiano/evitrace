@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     llm_timeout_sec: int = Field(default=180, validation_alias="LLM_TIMEOUT_SEC")
     llm_max_retries: int = Field(default=2, validation_alias="LLM_MAX_RETRIES")
     mock_ai: bool = Field(default=True, validation_alias="MOCK_AI")
+    ocr_model_dir: str | None = Field(default=None, validation_alias="OCR_MODEL_DIR")
+    asr_model_dir: str | None = Field(default=None, validation_alias="ASR_MODEL_DIR")
+    asr_model_size: str = Field(default="small", validation_alias="ASR_MODEL_SIZE")
+    ffmpeg_timeout_sec: int = Field(default=120, validation_alias="FFMPEG_TIMEOUT_SEC")
     video_frame_interval_sec: int = Field(
         default=10, validation_alias="VIDEO_FRAME_INTERVAL_SEC"
     )
@@ -67,6 +71,7 @@ class Settings(BaseSettings):
         "local_llm_base_url",
         "local_llm_api_key",
         "local_llm_model",
+        "asr_model_size",
         "first_admin_username",
         "first_admin_password",
     )
@@ -74,6 +79,13 @@ class Settings(BaseSettings):
     def require_non_empty(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("must not be empty")
+        return value
+
+    @field_validator("ocr_model_dir", "asr_model_dir", mode="before")
+    @classmethod
+    def empty_model_dir_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
         return value
 
     @model_validator(mode="after")

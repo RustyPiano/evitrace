@@ -10,6 +10,7 @@ from app.models import SkillConfig, User
 from app.schemas import AdminSkillUpdate, AdminUserCreate, AdminUserUpdate, AppError
 from app.services.audit_service import record_audit
 from app.services.auth_service import hash_password
+from app.skills.registry import check_skill_health as run_skill_health
 from app.skills.registry import serialize_skill_config, set_skill_enabled
 
 
@@ -149,3 +150,7 @@ def update_skill(
     db.commit()
     db.refresh(config)
     return serialize_skill_config(config)
+
+
+def check_skill_health(db: Session, skill_id: str) -> dict[str, Any]:
+    return run_skill_health(db, skill_id)

@@ -7,6 +7,7 @@ from app.models import TaskFile, User
 from app.schemas import AppError
 from app.services import parse_service
 from app.schemas import TaskCreate, TaskUpdate
+from app.services import run_guard
 from app.services import task_service
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -68,15 +69,18 @@ def parse_task_files(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    task = task_service.ensure_task_access(db, task_id, current_user)
-    if task.status in TASK_RUNNING_STATUSES:
-        raise AppError("TASK_ALREADY_RUNNING", "已有任务运行", status.HTTP_409_CONFLICT)
-    file_count = db.query(TaskFile).filter(TaskFile.task_id == task.id).count()
-    if file_count == 0:
-        raise AppError("TASK_NOT_READY", "无可分析文件", status.HTTP_409_CONFLICT)
+    with run_guard.single_run_start_lock():
+        task = task_service.ensure_task_access(db, task_id, current_user)
+        if task.status in TASK_RUNNING_STATUSES:
+            raise AppError("TASK_ALREADY_RUNNING", "已有任务运行", status.HTTP_409_CONFLICT)
+        run_guard.ensure_no_active_run(db)
+        file_count = db.query(TaskFile).filter(TaskFile.task_id == task.id).count()
+        if file_count == 0:
+            raise AppError("TASK_NOT_READY", "无可分析文件", status.HTTP_409_CONFLICT)
 
-    task.status = TASK_STATUS_PARSING
-    task.last_error = None
-    db.commit()
-    background_tasks.add_task(parse_service.parse_all_files, task.id)
+        task.status = TASK_STATUS_PARSING
+        task.last_error = None
+        db.commit()
+
+    background_tasks.add_task(parse_service.parse_task_files_for_endpoint, task.id)
     return {"data": {"task_id": task.id, "status": TASK_STATUS_PARSING}, "message": "ok"}

@@ -63,3 +63,15 @@ def update_skill(
         "data": admin_service.update_skill(db, skill_id, payload, current_user),
         "message": "ok",
     }
+
+
+@router.post("/skills/{skill_id}/health")
+def check_skill_health(
+    skill_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+) -> dict:
+    return {
+        "data": admin_service.check_skill_health(db, skill_id),
+        "message": "ok",
+    }

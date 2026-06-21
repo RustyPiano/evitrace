@@ -2,7 +2,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-from app.config import settings
+from app.config import PROJECT_ROOT, settings
 
 from .base import SkillContext, SkillManifest, SkillResult
 from .utils import coerce_items, original_file_path, sidecar_fixture
@@ -16,6 +16,21 @@ def _default_segments() -> list[dict[str, Any]]:
         {"text": "MOCK 音频第一段", "start_ms": 0, "end_ms": 2500, "confidence": None},
         {"text": "MOCK 音频第二段", "start_ms": 2500, "end_ms": 5000, "confidence": None},
     ]
+
+
+def resolve_asr_model_path() -> Path:
+    if not settings.asr_model_dir:
+        raise RuntimeError("ASR_MODEL_DIR 未配置，真实 ASR 需要本地模型目录")
+
+    model_root = Path(settings.asr_model_dir).expanduser()
+    if not model_root.is_absolute():
+        model_root = PROJECT_ROOT / model_root
+    model_root = model_root.resolve()
+    if not model_root.is_dir():
+        raise RuntimeError(f"ASR_MODEL_DIR 不存在: {model_root}")
+
+    sized_model = model_root / settings.asr_model_size
+    return sized_model if sized_model.is_dir() else model_root
 
 
 def _segment_evidence(
@@ -71,7 +86,12 @@ def real_transcript_evidence(
     if _ASR_MODEL is None:
         from faster_whisper import WhisperModel
 
-        _ASR_MODEL = WhisperModel("small", device="cpu", compute_type="int8")
+        _ASR_MODEL = WhisperModel(
+            str(resolve_asr_model_path()),
+            device="cpu",
+            compute_type="int8",
+            local_files_only=True,
+        )
 
     segments, _ = _ASR_MODEL.transcribe(str(path), vad_filter=True)
     evidence: list[dict] = []

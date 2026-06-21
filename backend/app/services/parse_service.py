@@ -9,10 +9,8 @@ from app.constants import (
     FILE_STATUS_PARSED,
     FILE_STATUS_PARSING,
     FILE_STATUS_WARNING,
-    RUN_STATUS_FAILED,
     RUN_STATUS_RUNNING,
-    RUN_STATUS_SUCCEEDED,
-    TASK_STATUS_PARSING,
+    TASK_STATUS_FAILED,
     TASK_STATUS_READY,
 )
 from app.database import SessionLocal
@@ -89,6 +87,24 @@ def _mark_run_progress(db, run_id: str | None, index: int, total: int, current_s
     run.progress = int(index / total * 100) if total else 0
 
 
+def _cleanup_file_derived_artifacts(task_id: str, file_id: str) -> None:
+    root = task_directory(task_id)
+    for relative_dir in ("derived/frames", "derived/audio"):
+        directory = root / relative_dir
+        if not directory.is_dir():
+            continue
+        for path in directory.iterdir():
+            if not path.is_file():
+                continue
+            if path.name == f"{file_id}.wav" or path.name.startswith(f"{file_id}_"):
+                path.unlink(missing_ok=True)
+
+
+def _summary_message(summary: ParseSummary) -> str | None:
+    combined = summary.errors + summary.warnings
+    return "; ".join(combined)[:1000] if combined else None
+
+
 def parse_all_files(task_id: str, run_id: str | None = None) -> ParseSummary:
     summary = ParseSummary(task_id=task_id, run_id=run_id)
     with SessionLocal() as db:
@@ -104,8 +120,6 @@ def parse_all_files(task_id: str, run_id: str | None = None) -> ParseSummary:
         if not files:
             raise AppError("TASK_NOT_READY", "无可分析文件", status.HTTP_409_CONFLICT)
 
-        task.status = TASK_STATUS_PARSING
-        task.last_error = None
         if run_id is not None:
             run = db.get(TaskRun, run_id)
             if run is not None:
@@ -118,6 +132,7 @@ def parse_all_files(task_id: str, run_id: str | None = None) -> ParseSummary:
         for index, file in enumerate(files, start=1):
             skill_id = PARSER_SKILL_BY_MODALITY.get(file.modality)
             result_service.delete_file_evidence(db, file.id)
+            _cleanup_file_derived_artifacts(task.id, file.id)
             if skill_id is None:
                 file.status = FILE_STATUS_WARNING
                 file.error_message = f"unsupported modality: {file.modality}"
@@ -182,18 +197,27 @@ def parse_all_files(task_id: str, run_id: str | None = None) -> ParseSummary:
             _mark_run_progress(db, run_id, index, len(files), file.original_name)
             db.commit()
 
+        db.commit()
+
+    return summary
+
+
+def parse_task_files_for_endpoint(task_id: str) -> ParseSummary | None:
+    try:
+        summary = parse_all_files(task_id)
+    except Exception as exc:
+        with SessionLocal() as db:
+            task = db.get(Task, task_id)
+            if task is not None:
+                task.status = TASK_STATUS_FAILED
+                task.last_error = str(exc)[:1000]
+                db.commit()
+        raise
+
+    with SessionLocal() as db:
         task = db.get(Task, task_id)
         if task is not None:
             task.status = TASK_STATUS_READY
-            combined = summary.errors + summary.warnings
-            task.last_error = "; ".join(combined)[:1000] if combined else None
-        if run_id is not None:
-            run = db.get(TaskRun, run_id)
-            if run is not None:
-                run.status = RUN_STATUS_FAILED if summary.errors else RUN_STATUS_SUCCEEDED
-                run.progress = 100
-                run.current_step = "parsing"
-                run.error_message = "; ".join(summary.errors)[:1000] if summary.errors else None
-        db.commit()
-
+            task.last_error = _summary_message(summary)
+            db.commit()
     return summary
