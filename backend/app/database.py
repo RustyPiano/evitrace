@@ -19,9 +19,9 @@ def _sqlite_connect_args(database_url: str) -> dict[str, bool]:
 
 
 def _ensure_data_paths() -> None:
-    Path(settings.data_root).mkdir(parents=True, exist_ok=True)
+    settings.data_root_path.mkdir(parents=True, exist_ok=True)
 
-    url = make_url(settings.database_url)
+    url = make_url(settings.resolved_database_url)
     if not url.drivername.startswith("sqlite"):
         return
 
@@ -33,8 +33,8 @@ def _ensure_data_paths() -> None:
 _ensure_data_paths()
 
 engine = create_engine(
-    settings.database_url,
-    connect_args=_sqlite_connect_args(settings.database_url),
+    settings.resolved_database_url,
+    connect_args=_sqlite_connect_args(settings.resolved_database_url),
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

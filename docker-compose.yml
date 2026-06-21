@@ -6,6 +6,9 @@ services:
       context: ./backend
     env_file:
       - .env.example
+    environment:
+      DATA_ROOT: /app/data
+      DATABASE_URL: sqlite:////app/data/app.db
     ports:
       - "8000:8000"
     volumes:

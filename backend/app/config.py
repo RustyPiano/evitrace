@@ -1,12 +1,18 @@
 from functools import lru_cache
+from pathlib import Path
+from typing import Annotated
 
 from pydantic import Field, ValidationError, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict, SettingsError
+from sqlalchemy.engine import make_url
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=(".env", "../.env"),
+        env_file=(PROJECT_ROOT / ".env",),
         env_file_encoding="utf-8",
         case_sensitive=True,
         extra="ignore",
@@ -23,7 +29,7 @@ class Settings(BaseSettings):
     )
     data_root: str = Field(default="./data", validation_alias="DATA_ROOT")
     max_upload_mb: int = Field(default=200, validation_alias="MAX_UPLOAD_MB")
-    cors_origins: list[str] = Field(
+    cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["http://localhost:5173"],
         validation_alias="CORS_ORIGINS",
     )
@@ -74,16 +80,43 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in value.split(",") if origin.strip()]
         return value
 
+    @property
+    def data_root_path(self) -> Path:
+        data_root = Path(self.data_root).expanduser()
+        if not data_root.is_absolute():
+            data_root = PROJECT_ROOT / data_root
+        return data_root.resolve()
+
+    @property
+    def resolved_database_url(self) -> str:
+        url = make_url(self.database_url)
+        if not url.drivername.startswith("sqlite"):
+            return self.database_url
+
+        database = url.database
+        if not database or database == ":memory:":
+            return self.database_url
+
+        database_path = Path(database).expanduser()
+        if not database_path.is_absolute():
+            database_path = PROJECT_ROOT / database_path
+        return url.set(database=str(database_path.resolve())).render_as_string(
+            hide_password=False
+        )
+
 
 @lru_cache
 def get_settings() -> Settings:
     try:
         return Settings()
-    except ValidationError as exc:
-        errors = "; ".join(
-            f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
-            for error in exc.errors()
-        )
+    except (ValidationError, SettingsError) as exc:
+        if isinstance(exc, ValidationError):
+            errors = "; ".join(
+                f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}"
+                for error in exc.errors()
+            )
+        else:
+            errors = str(exc)
         raise RuntimeError(f"Invalid application configuration: {errors}") from exc
 
 

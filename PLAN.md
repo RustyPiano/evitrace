@@ -97,9 +97,9 @@ FIRST_ADMIN_PASSWORD=admin123456
 
 **验收**：
 
-- [ ] 根目录结构与 SPEC 一致；
-- [ ] `.env.example` 不包含真实 Secret；
-- [ ] README 至少有开发启动占位说明。
+- [x] 根目录结构与 SPEC 一致；
+- [x] `.env.example` 不包含真实 Secret；
+- [x] README 至少有开发启动占位说明。
 
 ### M0-02 后端骨架
 
@@ -132,10 +132,10 @@ curl http://localhost:8000/api/v1/health
 
 **验收**：
 
-- [ ] 返回 HTTP 200；
-- [ ] `data/app.db` 自动创建；
-- [ ] Swagger 可打开；
-- [ ] 配置错误时启动信息明确。
+- [x] 返回 HTTP 200；
+- [x] `data/app.db` 自动创建；
+- [x] Swagger 可打开；
+- [x] 配置错误时启动信息明确。
 
 ### M0-03 前端骨架
 
@@ -158,9 +158,9 @@ npm install
 npm run dev
 ```
 
-- [ ] 页面可打开；
-- [ ] 路由切换正常；
-- [ ] 无 TypeScript 编译错误。
+- [x] 页面可打开；
+- [x] 路由切换正常；
+- [x] 无 TypeScript 编译错误。
 
 ### M0-04 Docker 开发环境
 
@@ -178,9 +178,9 @@ npm run dev
 docker compose up --build
 ```
 
-- [ ] 前端可访问；
-- [ ] 前端能调用后端 health；
-- [ ] 重启容器后数据库和上传文件保留。
+- [x] 前端可访问；
+- [x] 前端能调用后端 health；
+- [x] 重启容器后数据库和上传文件保留。
 
 ---
 

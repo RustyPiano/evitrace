@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
@@ -13,6 +14,8 @@ from .database import initialize_database
 from .schemas import AppError, ErrorDetail, ErrorResponse
 
 API_PREFIX = "/api/v1"
+INTERNAL_ERROR_MESSAGE = "服务器内部错误，请稍后重试"
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -75,17 +78,27 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(SQLAlchemyError)
     async def handle_database_error(_: Request, exc: SQLAlchemyError) -> JSONResponse:
+        logger.error(
+            "Database error: %s",
+            type(exc).__name__,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
         return _error_response(
             "DATABASE_ERROR",
-            str(exc),
+            INTERNAL_ERROR_MESSAGE,
             status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
     @app.exception_handler(Exception)
     async def handle_unexpected_error(_: Request, exc: Exception) -> JSONResponse:
+        logger.error(
+            "Unhandled error: %s",
+            type(exc).__name__,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
         return _error_response(
             "INTERNAL_SERVER_ERROR",
-            str(exc),
+            INTERNAL_ERROR_MESSAGE,
             status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
