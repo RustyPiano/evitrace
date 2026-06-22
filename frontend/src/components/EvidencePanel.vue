@@ -8,7 +8,7 @@
           <span>{{ evidence.display_id }}</span>
           <h2>{{ evidence.file.original_name }}</h2>
         </div>
-        <el-tag effect="plain">{{ evidence.evidence_type }}</el-tag>
+        <el-tag effect="plain">{{ evidenceTypeLabel(evidence.evidence_type) }}</el-tag>
       </div>
 
       <p class="evidence-content">{{ evidence.content }}</p>
@@ -100,6 +100,15 @@ const mediaUrl = ref<string | null>(null);
 const frameUrl = ref<string | null>(null);
 const mediaRef = ref<HTMLMediaElement | null>(null);
 const loadError = ref<{ title: string; type: "warning" | "error" } | null>(null);
+
+const evidenceTypeLabels: Record<string, string> = {
+  paragraph: "文本段落",
+  ocr: "图片文字",
+  asr: "音频转写",
+  video_frame_ocr: "视频帧文字",
+  image_caption: "画面描述",
+  video_frame_caption: "视频画面描述"
+};
 
 const mediaKind = computed(() => {
   if (!evidence.value) {
@@ -238,6 +247,10 @@ function classifyLoadError(error: unknown): { title: string; type: "warning" | "
     }
   }
   return { title: "证据加载失败，请稍后重试", type: "error" };
+}
+
+function evidenceTypeLabel(type: string): string {
+  return evidenceTypeLabels[type] ?? type;
 }
 
 function formatMs(value: number): string {

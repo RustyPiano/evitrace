@@ -18,7 +18,7 @@ def test_admin_health_requires_admin_and_returns_sanitized_components(client, cr
     assert response.status_code == 200
     components = response.json()["data"]["components"]
     names = {item["component"] for item in components}
-    assert names == {"database", "disk", "llm", "ffmpeg", "ocr", "asr"}
+    assert names == {"database", "disk", "llm", "ffmpeg", "ocr", "asr", "vlm"}
     assert {item["status"] for item in components} <= {"healthy", "unavailable", "skipped"}
     assert all("/" not in item["detail"] for item in components)
     assert all("\\" not in item["detail"] for item in components)

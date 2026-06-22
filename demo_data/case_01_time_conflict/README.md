@@ -5,6 +5,6 @@ This case plants a time conflict. Text and image evidence say 14:00; audio and v
 Files:
 - `brief.txt` and `report.pdf`: parsed by the real document parser.
 - `image.png`, `audio.wav`, `video.mp4`: real uploadable media files.
-- `image.ocr.json`, `audio.asr.json`, `video.video.json`: MOCK media sidecars.
+- `image.ocr.json`, `audio.asr.json`, `video.video.json`, `*.caption.json`: MOCK media sidecars.
 - `extraction.json`: deterministic MOCK extraction with `match` references.
 - `expected.json`: evaluator labels.

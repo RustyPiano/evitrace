@@ -64,6 +64,37 @@ def _evidence_items(result_data: dict | list | None) -> list[dict[str, Any]]:
     return items
 
 
+def _frame_items(result_data: dict | list | None) -> list[dict[str, Any]]:
+    if not isinstance(result_data, dict) or not isinstance(result_data.get("frames"), list):
+        return []
+    frames: list[dict[str, Any]] = []
+    for raw in result_data["frames"]:
+        if not isinstance(raw, dict):
+            continue
+        frame_path = str(raw.get("frame_path") or "")
+        if not frame_path:
+            continue
+        frames.append({"timestamp_ms": int(raw.get("timestamp_ms", 0)), "frame_path": frame_path})
+    return frames
+
+
+def _parser_skill_ids(modality: str) -> list[str]:
+    if modality == "image":
+        return ["image_ocr", "visual_understand"]
+    if modality == "video":
+        return ["video_parse", "visual_understand"]
+    skill_id = PARSER_SKILL_BY_MODALITY.get(modality)
+    return [skill_id] if skill_id is not None else []
+
+
+def _failure_is_fatal(skill_id: str, modality: str) -> bool:
+    if skill_id in {"document_parse", "audio_transcribe", "video_parse"}:
+        return True
+    if skill_id == "image_ocr" and modality == "image":
+        return False
+    return False
+
+
 def _validate_frame_paths(task_id: str, items: list[dict[str, Any]]) -> None:
     root = task_directory(task_id)
     frames_root = (root / "derived" / "frames").resolve()
@@ -175,21 +206,12 @@ def parse_all_files(
             progress_end,
         )
         for index, file in enumerate(files, start=1):
-            skill_id = PARSER_SKILL_BY_MODALITY.get(file.modality)
+            skill_ids = _parser_skill_ids(file.modality)
             result_service.delete_file_evidence(db, file.id)
             _cleanup_file_derived_artifacts(task.id, file.id)
-            if skill_id is None:
+            if not skill_ids:
                 file.status = FILE_STATUS_WARNING
                 file.error_message = f"unsupported modality: {file.modality}"
-                summary.warning_files += 1
-                summary.warnings.append(f"{file.original_name}: {file.error_message}")
-                mark_progress(index, file.original_name)
-                db.commit()
-                continue
-
-            if not is_enabled(db, skill_id):
-                file.status = FILE_STATUS_WARNING
-                file.error_message = f"{skill_id} disabled"
                 summary.warning_files += 1
                 summary.warnings.append(f"{file.original_name}: {file.error_message}")
                 mark_progress(index, file.original_name)
@@ -201,44 +223,73 @@ def parse_all_files(
             mark_progress(index - 1, file.original_name)
             db.commit()
 
-            try:
-                skill = get_skill(skill_id)
-                context = SkillContext(task_id=task.id, run_id=run_id, data_root=str(settings.data_root_path))
-                result = skill.run(context, {"file": serialize_file(file)})
-                if not result.success:
-                    message = _safe_join_details(result.errors, "解析失败")
-                    file.status = FILE_STATUS_FAILED
-                    file.error_message = message
-                    summary.failed_files += 1
-                    summary.errors.append(f"{file.original_name}: {message}")
-                    mark_progress(index, file.original_name)
-                    db.commit()
+            context = SkillContext(task_id=task.id, run_id=run_id, data_root=str(settings.data_root_path))
+            serialized_file = serialize_file(file)
+            collected_items: list[dict[str, Any]] = []
+            file_warnings: list[str] = []
+            file_errors: list[str] = []
+            video_frames: list[dict[str, Any]] = []
+
+            for skill_id in skill_ids:
+                if not is_enabled(db, skill_id):
+                    file_warnings.append(f"{skill_id} disabled")
                     continue
 
-                items = _evidence_items(result.data)
-                _validate_frame_paths(task.id, items)
-                for item in items:
-                    item["file_id"] = file.id
-                    item["skill_id"] = skill_id
-                created = result_service.create_evidence_batch(db, task.id, items)
-                summary.evidence_count += len(created)
+                try:
+                    skill = get_skill(skill_id)
+                    payload: dict[str, Any] = {"file": serialized_file}
+                    if skill_id == "visual_understand" and file.modality == "video":
+                        payload["frames"] = video_frames
+                    result = skill.run(context, payload)
+                    if not result.success:
+                        message = _safe_join_details(result.errors, "解析失败")
+                        detail = f"{skill_id} failed: {message}"
+                        if _failure_is_fatal(skill_id, file.modality):
+                            file_errors.append(detail)
+                            break
+                        file_warnings.append(detail)
+                        continue
 
-                if result.warnings:
-                    warnings = [_safe_parse_detail(warning) for warning in result.warnings]
-                    file.status = FILE_STATUS_WARNING
-                    file.error_message = "; ".join(warnings)
-                    summary.warning_files += 1
-                    summary.warnings.extend(f"{file.original_name}: {warning}" for warning in warnings)
-                else:
-                    file.status = FILE_STATUS_PARSED
-                    file.error_message = None
-                    summary.parsed_files += 1
-            except Exception as exc:
-                message = _safe_parse_detail(getattr(exc, "message", str(exc)))
+                    if skill_id == "video_parse":
+                        video_frames = _frame_items(result.data)
+
+                    items = _evidence_items(result.data)
+                    _validate_frame_paths(task.id, items)
+                    for item in items:
+                        item["file_id"] = file.id
+                        item["skill_id"] = skill_id
+                    collected_items.extend(items)
+
+                    if result.warnings:
+                        file_warnings.extend(_safe_parse_detail(warning) for warning in result.warnings)
+                except Exception as exc:
+                    message = _safe_parse_detail(getattr(exc, "message", str(exc)))
+                    detail = f"{skill_id} failed: {message}"
+                    if _failure_is_fatal(skill_id, file.modality):
+                        file_errors.append(detail)
+                        break
+                    file_warnings.append(detail)
+
+            if file_errors:
+                message = _safe_join_details(file_errors, "解析失败")
                 file.status = FILE_STATUS_FAILED
                 file.error_message = message
                 summary.failed_files += 1
                 summary.errors.append(f"{file.original_name}: {message}")
+            else:
+                _validate_frame_paths(task.id, collected_items)
+                created = result_service.create_evidence_batch(db, task.id, collected_items)
+                summary.evidence_count += len(created)
+
+                if file_warnings:
+                    file.status = FILE_STATUS_WARNING
+                    file.error_message = "; ".join(file_warnings)
+                    summary.warning_files += 1
+                    summary.warnings.extend(f"{file.original_name}: {warning}" for warning in file_warnings)
+                else:
+                    file.status = FILE_STATUS_PARSED
+                    file.error_message = None
+                    summary.parsed_files += 1
 
             mark_progress(index, file.original_name)
             db.commit()

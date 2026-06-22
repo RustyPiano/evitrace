@@ -17,7 +17,7 @@ FastAPI backend container
   |-- Auth / Task / File / Analysis / Admin APIs
   |-- deterministic orchestrator
   |-- document/image/audio/video parsing skills
-  |-- local LLM client or MOCK_AI fixtures
+  |-- local LLM/VLM clients or MOCK_AI fixtures
   v
 SQLite + uploads + derived frames + reports
   ./data  <->  /app/data
@@ -40,19 +40,23 @@ upload files -> validate type/path -> store originals -> parse to evidence
 - Docker Compose for the zero-config demo deployment.
 - Python 3.11 for local backend development and tests.
 - Node.js 20+ for local frontend development and builds.
-- ffmpeg is required to (re)generate demo `video.mp4` files and for real video parsing with `MOCK_AI=false`.
+- ffmpeg is required to (re)generate demo `video.mp4` files, for real video parsing, and for real VLM descriptions of video key frames.
 - Optional real OCR/ASR dependencies are in `backend/requirements-optional.txt`; they are not installed in the Docker demo image.
 
 Default `MOCK_AI=true` mode runs without LLM, OCR, ASR, or model weights.
 
 ## Local Model Preparation
 
-Real AI mode is offline-first and expects you to prepare local services and weights yourself:
+Fully local real AI mode is offline-first and expects you to prepare local services and weights yourself:
 
 - OpenAI-compatible local LLM endpoint:
   - `LOCAL_LLM_BASE_URL`, for example `http://host.docker.internal:11434/v1`
   - `LOCAL_LLM_API_KEY`
   - `LOCAL_LLM_MODEL`
+- OpenAI-compatible visual model endpoint for image and video key-frame descriptions:
+  - `VLM_BASE_URL`
+  - `VLM_API_KEY`
+  - `VLM_MODEL`, for example an image-capable Qwen-VL or GLM-4V model
 - OCR model directory:
   - `OCR_MODEL_DIR` containing local PaddleOCR `det/` and `rec/` directories, optional `cls/`
 - ASR model directory:
@@ -61,22 +65,30 @@ Real AI mode is offline-first and expects you to prepare local services and weig
 - Video parsing:
   - `ffmpeg` must be available in the runtime environment
 
-The application does not download model weights at runtime. Keep `MOCK_AI=true` until those local dependencies are installed and verified.
+The text LLM and visual VLM are separate endpoints. A text-only endpoint such as DeepSeek can be used for extraction/reporting, but visual understanding requires a model that accepts image inputs. The application does not download model weights at runtime. For fully local real mode, keep `MOCK_AI=true` until those local dependencies are installed and verified.
+
+Visual understanding is controlled separately from local OCR/ASR. Leave `MOCK_VISION` empty for auto mode: if `VLM_BASE_URL`, `VLM_API_KEY`, and `VLM_MODEL` are all set, image and video visual descriptions use the real VLM; otherwise they use caption fixtures. This is independent of `MOCK_MEDIA`, so local OCR/ASR can stay mocked while cloud VLM is real.
 
 ## 使用云端 OpenAI 兼容模型（无本地模型时）
 
-如果只有云端 OpenAI 兼容 LLM（例如 DeepSeek），但没有本地 PaddleOCR、faster-whisper 或视频解析依赖，可以让 LLM 走真实云端、媒体解析继续走确定性 fixture。示例 `.env`：
+如果只有云端 OpenAI 兼容 LLM/VLM（例如 DeepSeek 文本端点 + SiliconFlow 视觉端点），但没有本地 PaddleOCR 或 faster-whisper，可以让文本 LLM 和视觉 VLM 走真实云端、OCR/ASR/视频解析继续走确定性 fixture。示例 `.env`：
 
 ```env
 MOCK_AI=false
 MOCK_LLM=false
 MOCK_MEDIA=true
+MOCK_VISION=
 LOCAL_LLM_BASE_URL=https://api.deepseek.com/v1
 LOCAL_LLM_API_KEY=<put-your-key-in-private-.env-only>
 LOCAL_LLM_MODEL=deepseek-chat
+VLM_BASE_URL=https://api.siliconflow.cn/v1
+VLM_API_KEY=<put-your-vlm-key-in-private-.env-only>
+VLM_MODEL=Qwen/Qwen3.6-35B-A3B
 ```
 
-此模式下，TXT/PDF 仍由本地解析流程真实提取文本证据，云端 LLM 负责要素事件抽取和报告生成；OCR、ASR、视频关键帧/音轨解析使用 fixture，适合没有本地媒体模型的端到端演示与测试。API key 只放在已被 gitignore 的本机 `.env` 中，不要写入代码、README 示例以外的文件或提交记录。
+此模式下，TXT/PDF 仍由本地解析流程真实提取文本证据，云端 LLM 负责要素事件抽取和报告生成；OCR、ASR、视频关键帧/音轨解析使用 fixture；视觉理解由完整的 `VLM_*` 配置自动切到真实 VLM。视频真实视觉会从原视频按 `VIDEO_FRAME_INTERVAL_SEC` 抽帧；如果 ffmpeg 不可用或 VLM 返回 403、超时、余额不足等错误，视觉理解会降级为 warning，不影响 OCR/ASR/文档解析和任务完成。
+
+VLM 与文本 LLM 是两个独立端点。DeepSeek 等文本模型端点不能替代视觉端点；SiliconFlow 等 VLM 端点需要账户有可用余额。API key 只放在已被 gitignore 的本机 `.env` 中，不要写入代码、README 示例以外的文件、测试 fixture、提交记录或终端输出。
 
 ## Docker Startup
 
@@ -208,14 +220,15 @@ Do not commit `.env`, model weights, uploads, reports, or generated secrets.
 
 ## MOCK_AI Mode
 
-`MOCK_AI=true` is the default demo path. It keeps the whole API and UI workflow active while using deterministic fixtures:
+`MOCK_AI=true` is the default demo path. It keeps the whole API and UI workflow active while using deterministic fixtures unless a complete `VLM_*` configuration makes visual understanding real:
 
 - OCR/ASR/video parsing reads sidecar fixture JSON when available.
+- Visual understanding reads `*.caption.json` sidecar fixtures when `MOCK_VISION=true` or VLM is not configured; with complete `VLM_*` and empty `MOCK_VISION`, it calls the real VLM even if `MOCK_MEDIA=true`.
 - Entity and event extraction reads `mock/extraction.json` when available.
 - Conflict detection and report generation run locally and deterministically.
 - No public network or cloud model is required.
 
-Set `MOCK_AI=false` only after installing optional OCR/ASR packages, preparing offline model directories, making ffmpeg available, and pointing `LOCAL_LLM_*` to an OpenAI-compatible local model service.
+Set `MOCK_AI=false` for real LLM extraction/reporting. Set `MOCK_MEDIA=true` when local OCR/ASR are unavailable. Set `VLM_*` when visual understanding should call a real model, or set `MOCK_VISION=true` to force visual fixtures.
 
 ## Demo Flow
 
@@ -297,7 +310,7 @@ python scripts/evaluate_demo.py
 
 ## Known Limits
 
-This MVP intentionally does not include real-time stream ingestion, vector database retrieval, complex knowledge graphs, face recognition, geospatial map layers, multi-Agent free planning, distributed job queues, or fine-grained tenant isolation. Real OCR/ASR/LLM quality depends on locally supplied models and is outside the Docker MOCK demo image.
+This MVP intentionally does not include real-time stream ingestion, vector database retrieval, complex knowledge graphs, face recognition, geospatial map layers, multi-Agent free planning, distributed job queues, or fine-grained tenant isolation. Visual understanding describes sampled images and video key frames; it is not temporal action recognition, object tracking, or identity recognition. Real OCR/ASR/LLM/VLM quality depends on locally supplied models and is outside the Docker MOCK demo image.
 
 ## Security Boundary
 

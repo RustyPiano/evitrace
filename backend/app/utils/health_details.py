@@ -12,8 +12,12 @@ def _sensitive_values() -> Iterable[tuple[str, str]]:
         ("[secret]", settings.secret_key),
         ("[llm-base-url]", settings.local_llm_base_url),
     ]
-    if settings.local_llm_api_key != "local" and len(settings.local_llm_api_key) >= 8:
+    if settings.vlm_base_url:
+        values.append(("[vlm-base-url]", settings.vlm_base_url))
+    if settings.local_llm_api_key and settings.local_llm_api_key != "local":
         values.append(("[llm-api-key]", settings.local_llm_api_key))
+    if settings.vlm_api_key:
+        values.append(("[vlm-api-key]", settings.vlm_api_key))
     for label, raw in (("[ocr-model-dir]", settings.ocr_model_dir), ("[asr-model-dir]", settings.asr_model_dir)):
         if raw:
             path = Path(raw).expanduser()
@@ -46,4 +50,12 @@ def public_health_detail(value: object) -> str:
         return "依赖未安装"
     if "ffmpeg" in lowered or "missing executable" in lowered:
         return "FFmpeg 不可用"
+    if (
+        "vlm_base_url" in lowered
+        or "vlm_model" in lowered
+        or "vlm_api_key" in lowered
+        or "vlm configuration" in lowered
+        or "vlm 配置" in text
+    ):
+        return "VLM 配置未就绪"
     return text

@@ -32,8 +32,10 @@ UPLOAD_FILES = [
 ]
 SIDECARS = [
     "image.ocr.json",
+    "image.caption.json",
     "audio.asr.json",
     "video.video.json",
+    "video.caption.json",
 ]
 
 

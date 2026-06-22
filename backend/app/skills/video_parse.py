@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 from time import perf_counter
 from typing import Any
@@ -65,7 +66,7 @@ def _default_frame_items() -> list[dict[str, Any]]:
     ]
 
 
-def mock_video_evidence(context: SkillContext, file_info: dict[str, Any]) -> tuple[list[dict], list[str]]:
+def mock_video_outputs(context: SkillContext, file_info: dict[str, Any]) -> tuple[list[dict], list[str], list[dict]]:
     fixture = sidecar_fixture(context, file_info, "video")
     audio_evidence, audio_warnings = mock_transcript_evidence(
         context,
@@ -101,16 +102,24 @@ def mock_video_evidence(context: SkillContext, file_info: dict[str, Any]) -> tup
         raw_frames = coerce_items(fixture, ("frame_ocr", "frames", "items"))
 
     frame_evidence: list[dict] = []
+    frames: list[dict] = []
     for index, raw in enumerate(raw_frames):
         if not isinstance(raw, dict):
             continue
         frame_path = _write_placeholder_frame(context, file_info, index)
+        timestamp_ms = int(raw.get("timestamp_ms", 0))
+        frames.append({"timestamp_ms": timestamp_ms, "frame_path": frame_path})
         item = _frame_evidence(raw, frame_path)
         if item is not None:
             frame_evidence.append(item)
 
     warnings = audio_warnings + ([] if frame_evidence else [NO_FRAME_TEXT_WARNING])
-    return audio_evidence + frame_evidence, warnings
+    return audio_evidence + frame_evidence, warnings, frames
+
+
+def mock_video_evidence(context: SkillContext, file_info: dict[str, Any]) -> tuple[list[dict], list[str]]:
+    evidence, warnings, _frames = mock_video_outputs(context, file_info)
+    return evidence, warnings
 
 
 def _run_ffmpeg(command: list[str], *, timeout: int) -> None:
@@ -130,15 +139,51 @@ def _run_ffmpeg(command: list[str], *, timeout: int) -> None:
         raise RuntimeError(completed.stderr.strip() or "ffmpeg failed")
 
 
-def real_video_evidence(context: SkillContext, file_info: dict[str, Any]) -> tuple[list[dict], list[str]]:
-    import shutil
+def extract_video_frames(context: SkillContext, file_info: dict[str, Any]) -> list[dict[str, Any]]:
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("FFmpeg 不可用，无法抽取视频关键帧")
 
+    source = original_file_path(context, file_info)
+    frames_dir = ensure_derived_dir(context, "frames")
+    frames_root = derived_path(context, "derived/frames")
+    frame_pattern = (frames_dir / f"{file_info['id']}_frame_%06d.png").resolve()
+    if not frame_pattern.parent.is_relative_to(frames_root):
+        raise ValueError("frame path escaped derived/frames")
+
+    for stale_frame in frames_dir.glob(f"{file_info['id']}_frame_*.png"):
+        stale_frame.unlink(missing_ok=True)
+
+    interval = max(settings.video_frame_interval_sec, 1)
+    _run_ffmpeg(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(source),
+            "-vf",
+            f"fps=1/{interval}",
+            str(frame_pattern),
+        ],
+        timeout=settings.ffmpeg_timeout_sec,
+    )
+
+    frames: list[dict[str, Any]] = []
+    task_root = derived_path(context, "")
+    for index, frame in enumerate(sorted(frames_dir.glob(f"{file_info['id']}_frame_*.png"))):
+        absolute_frame = frame.resolve()
+        if not absolute_frame.is_relative_to(frames_root):
+            raise ValueError("frame path escaped derived/frames")
+        relative_path = absolute_frame.relative_to(task_root).as_posix()
+        frames.append({"timestamp_ms": index * interval * 1000, "frame_path": relative_path})
+    return frames
+
+
+def real_video_outputs(context: SkillContext, file_info: dict[str, Any]) -> tuple[list[dict], list[str], list[dict]]:
     if shutil.which("ffmpeg") is None:
         raise RuntimeError("FFmpeg 不可用，无法解析视频")
 
     source = original_file_path(context, file_info)
     audio_dir = ensure_derived_dir(context, "audio")
-    frames_dir = ensure_derived_dir(context, "frames")
     audio_path = audio_dir / f"{file_info['id']}.wav"
     evidence: list[dict] = []
     warnings: list[str] = []
@@ -160,26 +205,13 @@ def real_video_evidence(context: SkillContext, file_info: dict[str, Any]) -> tup
         if audio_warnings:
             warnings.append(NO_VIDEO_AUDIO_WARNING)
 
-    frame_pattern = frames_dir / f"{file_info['id']}_frame_%06d.png"
-    interval = max(settings.video_frame_interval_sec, 1)
-    _run_ffmpeg(
-        [
-            "ffmpeg",
-            "-y",
-            "-i",
-            str(source),
-            "-vf",
-            f"fps=1/{interval}",
-            str(frame_pattern),
-        ],
-        timeout=settings.ffmpeg_timeout_sec,
-    )
+    frames = extract_video_frames(context, file_info)
 
     frame_evidence: list[dict] = []
-    for index, frame in enumerate(sorted(frames_dir.glob(f"{file_info['id']}_frame_*.png"))):
-        ocr_items, _ = real_ocr_evidence(frame)
-        relative_path = frame.relative_to(derived_path(context, ""))
-        timestamp_ms = index * interval * 1000
+    for frame in frames:
+        relative_path = frame["frame_path"]
+        timestamp_ms = int(frame["timestamp_ms"])
+        ocr_items, _ = real_ocr_evidence(derived_path(context, relative_path))
         for ocr_item in ocr_items:
             locator = ocr_item["locator"]
             frame_evidence.append(
@@ -190,7 +222,7 @@ def real_video_evidence(context: SkillContext, file_info: dict[str, Any]) -> tup
                     "locator": {
                         "kind": "video_frame",
                         "timestamp_ms": timestamp_ms,
-                        "frame_path": str(relative_path),
+                        "frame_path": relative_path,
                         "bbox": locator["bbox"],
                     },
                     "confidence": ocr_item.get("confidence"),
@@ -199,7 +231,12 @@ def real_video_evidence(context: SkillContext, file_info: dict[str, Any]) -> tup
 
     if not frame_evidence:
         warnings.append(NO_FRAME_TEXT_WARNING)
-    return evidence + frame_evidence, warnings
+    return evidence + frame_evidence, warnings, frames
+
+
+def real_video_evidence(context: SkillContext, file_info: dict[str, Any]) -> tuple[list[dict], list[str]]:
+    evidence, warnings, _frames = real_video_outputs(context, file_info)
+    return evidence, warnings
 
 
 class VideoParseSkill:
@@ -219,9 +256,9 @@ class VideoParseSkill:
         file_info = payload["file"]
         try:
             if settings.effective_mock_media:
-                evidence, warnings = mock_video_evidence(context, file_info)
+                evidence, warnings, frames = mock_video_outputs(context, file_info)
             else:
-                evidence, warnings = real_video_evidence(context, file_info)
+                evidence, warnings, frames = real_video_outputs(context, file_info)
         except Exception as exc:
             return SkillResult(
                 success=False,
@@ -233,6 +270,6 @@ class VideoParseSkill:
         return SkillResult(
             success=True,
             warnings=warnings,
-            data={"evidence": evidence},
+            data={"evidence": evidence, "frames": frames},
             metrics={"duration_ms": int((perf_counter() - started) * 1000), "evidence_count": len(evidence)},
         )

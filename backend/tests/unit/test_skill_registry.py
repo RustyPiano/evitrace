@@ -6,12 +6,13 @@ from app.skills.registry import check_skill_health, get_skill, is_enabled, regis
 from app.utils.health_details import redact_health_detail
 
 
-def test_registry_contains_seven_builtin_skills():
+def test_registry_contains_eight_builtin_skills():
     assert registered_skill_ids() == [
         "document_parse",
         "image_ocr",
         "audio_transcribe",
         "video_parse",
+        "visual_understand",
         "intelligence_extract",
         "conflict_detect",
         "report_generate",
@@ -54,6 +55,10 @@ def test_real_mode_health_requires_local_ocr_and_asr_model_dirs(monkeypatch, tmp
 def test_registry_media_health_uses_mock_media_when_llm_is_real(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "mock_ai", False)
     monkeypatch.setattr(settings, "mock_media", True)
+    monkeypatch.setattr(settings, "mock_vision", None, raising=False)
+    monkeypatch.setattr(settings, "vlm_base_url", None, raising=False)
+    monkeypatch.setattr(settings, "vlm_api_key", None, raising=False)
+    monkeypatch.setattr(settings, "vlm_model", None, raising=False)
     monkeypatch.setattr(settings, "ocr_model_dir", str(tmp_path / "missing-ocr"), raising=False)
     monkeypatch.setattr(settings, "asr_model_dir", str(tmp_path / "missing-asr"), raising=False)
 
@@ -61,10 +66,43 @@ def test_registry_media_health_uses_mock_media_when_llm_is_real(monkeypatch, tmp
         ocr = check_skill_health(db, "image_ocr")
         asr = check_skill_health(db, "audio_transcribe")
         video = check_skill_health(db, "video_parse")
+        visual = check_skill_health(db, "visual_understand")
 
     assert ocr["last_error"] is None
     assert asr["last_error"] is None
     assert video["last_error"] is None
+    assert visual["last_error"] is None
+    assert visual["last_status"] == "skipped"
+
+
+def test_visual_understand_health_is_real_when_vlm_configured_even_if_media_is_mocked(monkeypatch):
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", True)
+    monkeypatch.setattr(settings, "mock_vision", None, raising=False)
+    monkeypatch.setattr(settings, "vlm_base_url", "https://vlm.example/v1", raising=False)
+    monkeypatch.setattr(settings, "vlm_api_key", "private-vlm-api-key", raising=False)
+    monkeypatch.setattr(settings, "vlm_model", "qwen-vl", raising=False)
+
+    with SessionLocal() as db:
+        visual = check_skill_health(db, "visual_understand")
+
+    assert visual["last_status"] == "healthy"
+    assert visual["last_error"] is None
+
+
+def test_visual_understand_real_mode_health_requires_vlm_config(monkeypatch):
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", True)
+    monkeypatch.setattr(settings, "mock_vision", False, raising=False)
+    monkeypatch.setattr(settings, "vlm_base_url", None, raising=False)
+    monkeypatch.setattr(settings, "vlm_api_key", None, raising=False)
+    monkeypatch.setattr(settings, "vlm_model", None, raising=False)
+
+    with SessionLocal() as db:
+        visual = check_skill_health(db, "visual_understand")
+
+    assert visual["last_status"] == SKILL_STATUS_ERROR
+    assert visual["last_error"] == "VLM 配置未就绪"
 
 
 def test_health_detail_redacts_sensitive_settings(monkeypatch, tmp_path):
@@ -74,10 +112,13 @@ def test_health_detail_redacts_sensitive_settings(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "asr_model_dir", str(asr_dir), raising=False)
     monkeypatch.setattr(settings, "local_llm_base_url", "http://secret-llm.local/v1", raising=False)
     monkeypatch.setattr(settings, "local_llm_api_key", "private-api-key", raising=False)
+    monkeypatch.setattr(settings, "vlm_base_url", "https://secret-vlm.local/v1", raising=False)
+    monkeypatch.setattr(settings, "vlm_api_key", "private-vlm-api-key", raising=False)
 
     detail = redact_health_detail(
         f"{settings.data_root_path} {ocr_dir} {asr_dir} "
-        f"{settings.secret_key} {settings.local_llm_base_url} {settings.local_llm_api_key}"
+        f"{settings.secret_key} {settings.local_llm_base_url} {settings.local_llm_api_key} "
+        f"{settings.vlm_base_url} {settings.vlm_api_key}"
     )
 
     assert str(settings.data_root_path) not in detail
@@ -86,4 +127,15 @@ def test_health_detail_redacts_sensitive_settings(monkeypatch, tmp_path):
     assert settings.secret_key not in detail
     assert settings.local_llm_base_url not in detail
     assert settings.local_llm_api_key not in detail
+    assert settings.vlm_base_url not in detail
+    assert settings.vlm_api_key not in detail
     assert len(detail) <= 160
+
+
+def test_health_detail_redacts_short_vlm_api_key(monkeypatch):
+    monkeypatch.setattr(settings, "vlm_api_key", "vlm123", raising=False)
+
+    detail = redact_health_detail(f"VLM failed with key {settings.vlm_api_key}")
+
+    assert "[vlm-api-key]" in detail
+    assert "vlm123" not in detail

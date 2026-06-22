@@ -6,6 +6,7 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models import Evidence, SkillConfig, Task, TaskFile, TaskRun
 from app.services import parse_service
+from app.skills.registry import get_skill as registry_get_skill
 from app.skills.base import SkillResult
 
 from tests.conftest import login_headers
@@ -97,6 +98,9 @@ def test_parse_all_files_generates_multimodal_evidence_and_video_frame(client, c
         assert any('"kind": "audio"' in locator for locator in locators)
         assert any('"kind": "video_audio"' in locator for locator in locators)
         assert any('"kind": "video_frame"' in locator for locator in locators)
+        evidence_types = {item.evidence_type for item in evidence}
+        assert "image_caption" in evidence_types
+        assert "video_frame_caption" in evidence_types
 
     frame_dir = settings.data_root_path / "tasks" / task_id / "derived" / "frames"
     assert any(path.suffix == ".png" for path in frame_dir.iterdir())
@@ -145,7 +149,7 @@ def test_evidence_index_returns_all_display_ids_beyond_page_limit(client, create
     assert item_51["evidence_type"] == "paragraph"
 
 
-def test_disabled_parser_marks_matching_files_warning_and_skips_evidence(client, create_user):
+def test_disabled_image_ocr_still_runs_visual_understand_as_warning(client, create_user):
     create_user("owner")
     headers = login_headers(client, "owner", "password")
     task_id = _create_task(client, headers)
@@ -166,7 +170,66 @@ def test_disabled_parser_marks_matching_files_warning_and_skips_evidence(client,
         file = db.get(TaskFile, uploaded["id"])
         assert file.status == "warning"
         assert file.error_message == "image_ocr disabled"
+        evidence = db.query(Evidence).filter(Evidence.file_id == uploaded["id"]).all()
+        assert [item.evidence_type for item in evidence] == ["image_caption"]
+        assert evidence[0].skill_id == "visual_understand"
+
+
+def test_disabled_image_parsers_mark_file_warning_and_skip_evidence(client, create_user):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    [uploaded] = client.post(
+        f"/api/v1/tasks/{task_id}/files",
+        headers=headers,
+        files=[("files", ("image.png", _png_bytes(), "image/png"))],
+    ).json()["data"]
+    with SessionLocal() as db:
+        db.get(SkillConfig, "image_ocr").enabled = False
+        db.get(SkillConfig, "visual_understand").enabled = False
+        db.commit()
+
+    summary = parse_service.parse_all_files(task_id)
+
+    assert summary.warning_files == 1
+    with SessionLocal() as db:
+        file = db.get(TaskFile, uploaded["id"])
+        assert file.status == "warning"
+        assert file.error_message == "image_ocr disabled; visual_understand disabled"
         assert db.query(Evidence).filter(Evidence.file_id == uploaded["id"]).count() == 0
+
+
+def test_visual_understand_failure_warns_without_blocking_image_ocr(client, create_user, monkeypatch):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    [uploaded] = client.post(
+        f"/api/v1/tasks/{task_id}/files",
+        headers=headers,
+        files=[("files", ("image.png", _png_bytes(), "image/png"))],
+    ).json()["data"]
+
+    class FailingVisualSkill:
+        def run(self, _context, _payload):
+            return SkillResult(success=False, errors=["VLM_BASE_URL/VLM_MODEL 未配置"], data={"evidence": []})
+
+    def fake_get_skill(skill_id: str):
+        if skill_id == "visual_understand":
+            return FailingVisualSkill()
+        return registry_get_skill(skill_id)
+
+    monkeypatch.setattr(parse_service, "get_skill", fake_get_skill)
+
+    summary = parse_service.parse_all_files(task_id)
+
+    assert summary.warning_files == 1
+    assert "visual_understand failed" in summary.warnings[0]
+    with SessionLocal() as db:
+        file = db.get(TaskFile, uploaded["id"])
+        assert file.status == "warning"
+        assert "visual_understand failed" in file.error_message
+        evidence = db.query(Evidence).filter(Evidence.file_id == uploaded["id"]).all()
+        assert [item.evidence_type for item in evidence] == ["ocr"]
 
 
 def test_corrupt_document_marks_file_failed_without_blocking_other_files(client, create_user):

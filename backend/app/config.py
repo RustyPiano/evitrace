@@ -43,11 +43,15 @@ class Settings(BaseSettings):
     )
     local_llm_api_key: str = Field(default="local", validation_alias="LOCAL_LLM_API_KEY")
     local_llm_model: str = Field(default="qwen-local", validation_alias="LOCAL_LLM_MODEL")
+    vlm_base_url: str | None = Field(default=None, validation_alias="VLM_BASE_URL")
+    vlm_api_key: str | None = Field(default=None, validation_alias="VLM_API_KEY")
+    vlm_model: str | None = Field(default=None, validation_alias="VLM_MODEL")
     llm_timeout_sec: int = Field(default=180, validation_alias="LLM_TIMEOUT_SEC")
     llm_max_retries: int = Field(default=2, validation_alias="LLM_MAX_RETRIES")
     mock_ai: bool = Field(default=True, validation_alias="MOCK_AI")
     mock_llm: bool | None = Field(default=None, validation_alias="MOCK_LLM")
     mock_media: bool | None = Field(default=None, validation_alias="MOCK_MEDIA")
+    mock_vision: bool | None = Field(default=None, validation_alias="MOCK_VISION")
     ocr_model_dir: str | None = Field(default=None, validation_alias="OCR_MODEL_DIR")
     asr_model_dir: str | None = Field(default=None, validation_alias="ASR_MODEL_DIR")
     asr_model_size: str = Field(default="small", validation_alias="ASR_MODEL_SIZE")
@@ -90,7 +94,14 @@ class Settings(BaseSettings):
             return None
         return value
 
-    @field_validator("mock_llm", "mock_media", mode="before")
+    @field_validator("vlm_base_url", "vlm_api_key", "vlm_model", mode="before")
+    @classmethod
+    def empty_vlm_setting_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("mock_llm", "mock_media", "mock_vision", mode="before")
     @classmethod
     def empty_mock_override_to_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
@@ -150,6 +161,16 @@ class Settings(BaseSettings):
     @property
     def effective_mock_media(self) -> bool:
         return self.mock_ai if self.mock_media is None else self.mock_media
+
+    @property
+    def vlm_configured(self) -> bool:
+        return bool(self.vlm_base_url and self.vlm_model and self.vlm_api_key)
+
+    @property
+    def effective_mock_vision(self) -> bool:
+        if self.mock_vision is not None:
+            return self.mock_vision
+        return not self.vlm_configured
 
     @property
     def resolved_database_url(self) -> str:

@@ -39,6 +39,8 @@ class DemoCase:
     audio_text: str
     video_audio_text: str
     video_frame_text: str
+    image_caption: str
+    video_frame_caption: str
     readme: str
 
 
@@ -133,6 +135,14 @@ def cases() -> list[DemoCase]:
             audio_text="Radio transcript: Delta check-in was actually 16:30 at Harbor Gate with 3 vehicles.",
             video_audio_text="Video audio: Delta convoy check-in time is 16:30 at Harbor Gate.",
             video_frame_text="Video slate shows Delta check-in 16:30.",
+            image_caption=(
+                "Synthetic board scene for Delta convoy at Harbor Gate; the visible board records 3 vehicles "
+                "and a 14:00 check-in time."
+            ),
+            video_frame_caption=(
+                "Video key frame shows a static training slate for Delta convoy at Harbor Gate with the "
+                "check-in time shown as 16:30."
+            ),
             readme=(
                 "This case plants a time conflict. Text and image evidence say 14:00; "
                 "audio and video evidence say 16:30. Other fields are held constant."
@@ -159,6 +169,14 @@ def cases() -> list[DemoCase]:
             audio_text="Radio transcript: Echo team confirms North Pier delivery point at 09:15.",
             video_audio_text="Video audio: Echo team delivery point is East Warehouse.",
             video_frame_text="Video slate shows East Warehouse for Echo team.",
+            image_caption=(
+                "Synthetic gate-sign scene for Echo team delivery; the sign names East Warehouse, 2 crates, "
+                "and 09:15."
+            ),
+            video_frame_caption=(
+                "Video key frame shows a static training slate for Echo team with East Warehouse presented "
+                "as the delivery point."
+            ),
             readme=(
                 "This case plants a location conflict. Text and audio evidence say North Pier; "
                 "image and video evidence say East Warehouse. Time and quantity are stable."
@@ -185,6 +203,14 @@ def cases() -> list[DemoCase]:
             audio_text="Radio transcript: Foxtrot patrol counted 5 vehicles at Training Yard.",
             video_audio_text="Video audio: Foxtrot patrol count is 5 vehicles.",
             video_frame_text="Video slate shows Foxtrot count 5 vehicles.",
+            image_caption=(
+                "Synthetic whiteboard scene for Foxtrot patrol at Training Yard; the board records a count "
+                "of 3 utility vehicles."
+            ),
+            video_frame_caption=(
+                "Video key frame shows a static training slate for Foxtrot patrol at Training Yard with "
+                "the count shown as 5 vehicles."
+            ),
             readme=(
                 "This case plants a quantity conflict. Text and image evidence say 3 vehicles; "
                 "audio and video evidence say 5 vehicles. Time and location are stable."
@@ -330,6 +356,7 @@ def write_case(case: DemoCase) -> list[str]:
             ]
         },
     )
+    write_json(case_dir / "image.caption.json", {"caption": case.image_caption})
     write_json(
         case_dir / "audio.asr.json",
         {
@@ -362,6 +389,17 @@ def write_case(case: DemoCase) -> list[str]:
                     "confidence": 0.93,
                 }
             ],
+        },
+    )
+    write_json(
+        case_dir / "video.caption.json",
+        {
+            "frames": [
+                {
+                    "timestamp_ms": 2000,
+                    "caption": case.video_frame_caption,
+                }
+            ]
         },
     )
 
@@ -426,7 +464,7 @@ def write_case(case: DemoCase) -> list[str]:
                 "Files:",
                 "- `brief.txt` and `report.pdf`: parsed by the real document parser.",
                 "- `image.png`, `audio.wav`, `video.mp4`: real uploadable media files.",
-                "- `image.ocr.json`, `audio.asr.json`, `video.video.json`: MOCK media sidecars.",
+                "- `image.ocr.json`, `audio.asr.json`, `video.video.json`, `*.caption.json`: MOCK media sidecars.",
                 "- `extraction.json`: deterministic MOCK extraction with `match` references.",
                 "- `expected.json`: evaluator labels.",
                 "",

@@ -355,7 +355,7 @@ class SkillResult(BaseModel):
 
 **测试**：
 
-- [x] 注册表包含 7 个 Skill；
+- [x] 注册表包含 8 个 Skill；
 - [x] 停用非必需 Skill 后不执行；
 - [x] required Skill 停用请求被拒绝。
 
@@ -1194,4 +1194,3 @@ def validate_report(report: str, valid_ids: set[str]) -> CitationCheck:
 - [x] 课程汇报中的架构、流程、创新点和验证结果。
 
 完成上述清单即视为 MVP 交付完成。
-

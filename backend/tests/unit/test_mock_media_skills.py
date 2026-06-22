@@ -10,8 +10,10 @@ from app.services.task_service import serialize_file
 from app.skills.audio_transcribe import AudioTranscribeSkill
 from app.skills.base import SkillContext
 from app.skills.image_ocr import ImageOcrSkill
+from app.skills import visual_understand as visual_understand_module
 from app.skills import video_parse as video_parse_module
 from app.skills.video_parse import NO_FRAME_TEXT_WARNING, NO_VIDEO_AUDIO_WARNING, VideoParseSkill
+from app.skills.visual_understand import VisualUnderstandSkill
 from app.database import SessionLocal
 
 
@@ -55,6 +57,92 @@ def test_mock_image_ocr_default_fixture_generates_bbox_evidence():
     assert evidence[0]["evidence_type"] == "ocr"
     assert evidence[0]["locator"]["kind"] == "image"
     assert len(evidence[0]["locator"]["bbox"]) == 4
+
+
+def test_mock_image_visual_understand_reads_caption_sidecar():
+    task_id = "image-caption-task"
+    file = _insert_file(task_id, "image.png", "png", "image")
+    fixture = settings.data_root_path / "tasks" / task_id / "original" / "image.png.caption.json"
+    fixture.write_text(json.dumps({"caption": "画面显示检查站旁有三辆车。"}), encoding="utf-8")
+
+    result = VisualUnderstandSkill().run(_context(task_id), {"file": serialize_file(file)})
+
+    assert result.success is True
+    evidence = result.data["evidence"]
+    assert evidence == [
+        {
+            "content": "画面显示检查站旁有三辆车。",
+            "modality": "image",
+            "evidence_type": "image_caption",
+            "locator": {"kind": "image"},
+            "confidence": None,
+        }
+    ]
+
+
+def test_mock_image_visual_understand_default_caption_when_fixture_missing():
+    task_id = "image-caption-default-task"
+    file = _insert_file(task_id, "image.png", "png", "image")
+
+    result = VisualUnderstandSkill().run(_context(task_id), {"file": serialize_file(file)})
+
+    assert result.success is True
+    evidence = result.data["evidence"]
+    assert evidence[0]["evidence_type"] == "image_caption"
+    assert evidence[0]["locator"] == {"kind": "image"}
+    assert "MOCK 画面描述" in evidence[0]["content"]
+    assert "image.png" in evidence[0]["content"]
+
+
+def test_real_image_visual_understand_uses_vlm_when_media_is_mocked(monkeypatch):
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", True)
+    monkeypatch.setattr(settings, "mock_vision", None, raising=False)
+    monkeypatch.setattr(settings, "vlm_base_url", "https://vlm.example/v1", raising=False)
+    monkeypatch.setattr(settings, "vlm_api_key", "private-vlm-api-key", raising=False)
+    monkeypatch.setattr(settings, "vlm_model", "qwen-vl", raising=False)
+    task_id = "real-vlm-image-task"
+    file = _insert_file(task_id, "image.png", "png", "image")
+
+    class FakeVisionClient:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def describe_image(self, path, prompt):
+            self.calls.append((path, prompt))
+            return "真实 VLM 描述：画面中有车辆。"
+
+    client = FakeVisionClient()
+    result = VisualUnderstandSkill(vision_client=client).run(_context(task_id), {"file": serialize_file(file)})
+
+    assert result.success is True
+    assert result.warnings == []
+    assert len(client.calls) == 1
+    assert client.calls[0][0].name == "image.png"
+    assert result.data["evidence"][0]["content"] == "真实 VLM 描述：画面中有车辆。"
+
+
+def test_real_image_visual_understand_failure_warns_without_error(monkeypatch):
+    monkeypatch.setattr(settings, "mock_vision", False, raising=False)
+    monkeypatch.setattr(settings, "vlm_api_key", "private-vlm-api-key", raising=False)
+    task_id = "failing-vlm-image-task"
+    file = _insert_file(task_id, "image.png", "png", "image")
+
+    class FailingVisionClient:
+        def describe_image(self, _path, _prompt):
+            raise RuntimeError(f"VLM 返回 HTTP 403: {settings.vlm_api_key}")
+
+    result = VisualUnderstandSkill(vision_client=FailingVisionClient()).run(
+        _context(task_id),
+        {"file": serialize_file(file)},
+    )
+
+    assert result.success is True
+    assert result.errors == []
+    assert result.data["evidence"] == []
+    assert len(result.warnings) == 1
+    assert "视觉理解失败: RuntimeError: VLM 返回 HTTP 403" in result.warnings[0]
+    assert "private-vlm-api-key" not in result.warnings[0]
 
 
 def test_mock_image_ocr_empty_fixture_warns_without_fabricating_text():
@@ -114,6 +202,189 @@ def test_mock_video_parse_generates_audio_and_frame_evidence_with_safe_frame_pat
     task_dir = (settings.data_root_path / "tasks" / task_id).resolve()
     assert absolute_frame.is_file()
     assert absolute_frame.is_relative_to(task_dir)
+    assert result.data["frames"] == [
+        {
+            "timestamp_ms": 1000,
+            "frame_path": frame_path,
+        }
+    ]
+
+
+def test_mock_video_visual_understand_reads_frame_caption_sidecar():
+    task_id = "video-caption-task"
+    file = _insert_file(task_id, "clip.mp4", "mp4", "video")
+    frames_dir = settings.data_root_path / "tasks" / task_id / "derived" / "frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    frame_path = frames_dir / "clip_frame_000001.png"
+    frame_path.write_bytes(b"png")
+    fixture = settings.data_root_path / "tasks" / task_id / "original" / "clip.mp4.caption.json"
+    fixture.write_text(
+        json.dumps({"frames": [{"timestamp_ms": 2000, "caption": "关键帧显示仓库入口和车辆。"}]}),
+        encoding="utf-8",
+    )
+
+    result = VisualUnderstandSkill().run(
+        _context(task_id),
+        {
+            "file": serialize_file(file),
+            "frames": [{"timestamp_ms": 2000, "frame_path": "derived/frames/clip_frame_000001.png"}],
+        },
+    )
+
+    assert result.success is True
+    assert result.data["evidence"] == [
+        {
+            "content": "关键帧显示仓库入口和车辆。",
+            "modality": "video",
+            "evidence_type": "video_frame_caption",
+            "locator": {
+                "kind": "video_frame",
+                "timestamp_ms": 2000,
+                "frame_path": "derived/frames/clip_frame_000001.png",
+            },
+            "confidence": None,
+        }
+    ]
+
+
+def test_real_video_visual_understand_extracts_original_frames_when_media_is_mocked(monkeypatch):
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", True)
+    monkeypatch.setattr(settings, "mock_vision", None, raising=False)
+    monkeypatch.setattr(settings, "vlm_base_url", "https://vlm.example/v1", raising=False)
+    monkeypatch.setattr(settings, "vlm_api_key", "private-vlm-api-key", raising=False)
+    monkeypatch.setattr(settings, "vlm_model", "qwen-vl", raising=False)
+    task_id = "real-vlm-video-task"
+    file = _insert_file(task_id, "clip.mp4", "mp4", "video")
+    context = _context(task_id)
+    real_frame_path = f"derived/frames/{file.id}_frame_000001.png"
+    (settings.data_root_path / "tasks" / task_id / real_frame_path).parent.mkdir(parents=True, exist_ok=True)
+    (settings.data_root_path / "tasks" / task_id / real_frame_path).write_bytes(b"png")
+    extracted: list[str] = []
+
+    def fake_extract_video_frames(_context, file_info):
+        extracted.append(file_info["id"])
+        return [{"timestamp_ms": 0, "frame_path": real_frame_path}]
+
+    monkeypatch.setattr(visual_understand_module, "extract_video_frames", fake_extract_video_frames, raising=False)
+
+    class FakeVisionClient:
+        def __init__(self) -> None:
+            self.paths = []
+
+        def describe_image(self, path, _prompt):
+            self.paths.append(path)
+            return "真实视频帧描述"
+
+    client = FakeVisionClient()
+    result = VisualUnderstandSkill(vision_client=client).run(
+        context,
+        {
+            "file": serialize_file(file),
+            "frames": [{"timestamp_ms": 1000, "frame_path": "derived/frames/mock_frame.png"}],
+        },
+    )
+
+    assert result.success is True
+    assert extracted == [file.id]
+    assert [path.name for path in client.paths] == [f"{file.id}_frame_000001.png"]
+    assert result.data["evidence"] == [
+        {
+            "content": "真实视频帧描述",
+            "modality": "video",
+            "evidence_type": "video_frame_caption",
+            "locator": {
+                "kind": "video_frame",
+                "timestamp_ms": 0,
+                "frame_path": real_frame_path,
+            },
+            "confidence": None,
+        }
+    ]
+
+
+def test_real_video_visual_understand_reuses_video_parse_frames_when_media_is_real(monkeypatch):
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", False)
+    monkeypatch.setattr(settings, "mock_vision", None, raising=False)
+    monkeypatch.setattr(settings, "vlm_base_url", "https://vlm.example/v1", raising=False)
+    monkeypatch.setattr(settings, "vlm_api_key", "private-vlm-api-key", raising=False)
+    monkeypatch.setattr(settings, "vlm_model", "qwen-vl", raising=False)
+    task_id = "real-vlm-video-reuse-frames-task"
+    file = _insert_file(task_id, "clip.mp4", "mp4", "video")
+    context = _context(task_id)
+    parsed_frame_path = "derived/frames/video_parse_frame_000001.png"
+    (settings.data_root_path / "tasks" / task_id / parsed_frame_path).parent.mkdir(parents=True, exist_ok=True)
+    (settings.data_root_path / "tasks" / task_id / parsed_frame_path).write_bytes(b"png")
+    extracted: list[str] = []
+
+    def fake_extract_video_frames(_context, file_info):
+        extracted.append(file_info["id"])
+        extracted_frame_path = "derived/frames/extracted_again_frame_000001.png"
+        (settings.data_root_path / "tasks" / task_id / extracted_frame_path).write_bytes(b"png")
+        return [{"timestamp_ms": 0, "frame_path": extracted_frame_path}]
+
+    monkeypatch.setattr(visual_understand_module, "extract_video_frames", fake_extract_video_frames, raising=False)
+
+    class FakeVisionClient:
+        def __init__(self) -> None:
+            self.paths = []
+
+        def describe_image(self, path, _prompt):
+            self.paths.append(path)
+            return "复用视频帧描述"
+
+    client = FakeVisionClient()
+    result = VisualUnderstandSkill(vision_client=client).run(
+        context,
+        {
+            "file": serialize_file(file),
+            "frames": [{"timestamp_ms": 1000, "frame_path": parsed_frame_path}],
+        },
+    )
+
+    assert result.success is True
+    assert result.warnings == []
+    assert extracted == []
+    assert [path.name for path in client.paths] == ["video_parse_frame_000001.png"]
+    assert result.data["evidence"] == [
+        {
+            "content": "复用视频帧描述",
+            "modality": "video",
+            "evidence_type": "video_frame_caption",
+            "locator": {
+                "kind": "video_frame",
+                "timestamp_ms": 1000,
+                "frame_path": parsed_frame_path,
+            },
+            "confidence": None,
+        }
+    ]
+
+
+def test_real_video_visual_understand_ffmpeg_failure_warns_and_skips(monkeypatch):
+    monkeypatch.setattr(settings, "mock_vision", False, raising=False)
+    task_id = "ffmpeg-failing-vlm-video-task"
+    file = _insert_file(task_id, "clip.mp4", "mp4", "video")
+
+    def fake_extract_video_frames(_context, _file_info):
+        raise RuntimeError("FFmpeg 不可用，无法抽取视频关键帧")
+
+    monkeypatch.setattr(visual_understand_module, "extract_video_frames", fake_extract_video_frames, raising=False)
+
+    class UnexpectedVisionClient:
+        def describe_image(self, _path, _prompt):
+            pytest.fail("VLM should not run when frame extraction fails")
+
+    result = VisualUnderstandSkill(vision_client=UnexpectedVisionClient()).run(
+        _context(task_id),
+        {"file": serialize_file(file)},
+    )
+
+    assert result.success is True
+    assert result.errors == []
+    assert result.data["evidence"] == []
+    assert result.warnings == ["视频视觉理解跳过: RuntimeError: FFmpeg 不可用，无法抽取视频关键帧"]
 
 
 def test_mock_video_parse_empty_frame_fixture_warns_without_fabricating_text():
@@ -195,6 +466,32 @@ def test_real_video_parse_continues_frame_ocr_when_audio_extraction_fails(monkey
     assert warnings == [NO_VIDEO_AUDIO_WARNING]
     assert [item["locator"]["kind"] for item in evidence] == ["video_frame"]
     assert evidence[0]["content"] == "frame text"
+
+
+def test_extract_video_frames_uses_ffmpeg_interval_and_safe_relative_paths(monkeypatch):
+    task_id = "extract-video-frames-task"
+    file = _insert_file(task_id, "clip.mp4", "mp4", "video")
+    context = _context(task_id)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(settings, "video_frame_interval_sec", 7)
+    calls: list[list[str]] = []
+
+    def fake_run_ffmpeg(command: list[str], *, timeout: int) -> None:
+        calls.append(command)
+        output_pattern = command[-1]
+        frame_path = output_pattern.replace("%06d", "000001")
+        with open(frame_path, "wb") as handle:
+            handle.write(b"png")
+
+    monkeypatch.setattr(video_parse_module, "_run_ffmpeg", fake_run_ffmpeg)
+
+    frames = video_parse_module.extract_video_frames(context, serialize_file(file))
+
+    assert len(calls) == 1
+    assert calls[0][calls[0].index("-vf") + 1] == "fps=1/7"
+    assert frames == [{"timestamp_ms": 0, "frame_path": f"derived/frames/{file.id}_frame_000001.png"}]
+    absolute_frame = settings.data_root_path / "tasks" / task_id / frames[0]["frame_path"]
+    assert absolute_frame.is_file()
 
 
 def test_run_ffmpeg_converts_timeout_to_runtime_error(monkeypatch):

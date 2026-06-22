@@ -172,6 +172,7 @@ def component_health(db: Session) -> dict[str, Any]:
             _ffmpeg_health(),
             _ocr_health(),
             _asr_health(),
+            _vlm_health(),
         ]
     }
 
@@ -252,6 +253,14 @@ def _asr_health() -> dict[str, str]:
     if not _configured_directory_ready(settings.asr_model_dir):
         return _health_item("asr", "unavailable", "ASR model directory not ready")
     return _health_item("asr", "healthy", "ASR dependency and model directory ready")
+
+
+def _vlm_health() -> dict[str, str]:
+    if settings.effective_mock_vision:
+        return _health_item("vlm", "skipped", "vision mock mode enabled")
+    if not settings.vlm_configured:
+        return _health_item("vlm", "unavailable", "VLM configuration not ready")
+    return _health_item("vlm", "healthy", "VLM configuration ready")
 
 
 def _configured_directory_ready(value: str | None) -> bool:

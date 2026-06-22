@@ -79,7 +79,7 @@ EviTrace 是一个离线运行的多模态资料分析平台，可将文本、PD
 - 时间线生成；
 - 时间、地点、数量三类冲突检测；
 - 固定工作流式分析 Agent；
-- 7 个内置 Skill 及启停管理；
+- 8 个内置 Skill 及启停管理；
 - 带证据引用的报告生成；
 - 基础审计日志；
 - 三组虚构演示数据及对照验证。
@@ -335,14 +335,15 @@ awaiting_review → queued（重新分析）
 
 #### EVID-004 视频证据（MUST）
 
-视频解析仅包含：
+视频解析包含：
 
 1. 提取音轨并调用音频转写；
 2. 每隔 `VIDEO_FRAME_INTERVAL_SEC` 秒抽取一帧，默认 10 秒；
 3. 对关键帧执行 OCR；
-4. 将音轨证据和关键帧 OCR 证据关联至原视频。
+4. 在 `visual_understand` 启用时复用同一批关键帧生成画面描述；
+5. 将音轨证据、关键帧 OCR 证据和关键帧画面描述关联至原视频。
 
-首版不做通用视频动作识别和自动人物身份识别。
+首版不做通用视频动作识别、目标跟踪和自动人物身份识别。
 
 #### EVID-005 证据编号（MUST）
 
@@ -375,6 +376,13 @@ awaiting_review → queued（重新分析）
 ```
 
 ```json
+// 图片画面描述
+{
+  "kind": "image"
+}
+```
+
+```json
 // 音频
 {
   "kind": "audio",
@@ -402,13 +410,22 @@ awaiting_review → queued（重新分析）
 }
 ```
 
+```json
+// 视频关键帧画面描述
+{
+  "kind": "video_frame",
+  "timestamp_ms": 140000,
+  "frame_path": "derived/frames/frame_0000140.jpg"
+}
+```
+
 ### 5.5 分析 Agent 与执行计划
 
 #### AGENT-001 固定编排（MUST）
 
 首版 Agent 是确定性工作流执行器，不允许自由调用未知工具。固定步骤：
 
-1. `document_parse` / `image_ocr` / `audio_transcribe` / `video_parse`；
+1. `document_parse` / `image_ocr` / `audio_transcribe` / `video_parse` / `visual_understand`；
 2. `intelligence_extract`；
 3. `conflict_detect`；
 4. `report_generate`；
@@ -595,7 +612,7 @@ awaiting_review → queued（重新分析）
 
 #### SKILL-001 内置 Skill（MUST）
 
-首版固定包含 7 个 Skill：
+首版固定包含 8 个 Skill：
 
 | Skill ID | 名称 | 主要输入 | 主要输出 |
 |---|---|---|---|
@@ -603,6 +620,7 @@ awaiting_review → queued（重新分析）
 | `image_ocr` | 图片 OCR | JPG/PNG | OCR 证据 |
 | `audio_transcribe` | 音频转写 | WAV/MP3/M4A | 带时间戳证据 |
 | `video_parse` | 视频解析 | MP4 | 音轨证据、关键帧 OCR 证据 |
+| `visual_understand` | 视觉理解 | JPG/PNG/MP4 | 图片/关键帧画面描述证据 |
 | `intelligence_extract` | 要素事件提取 | 证据列表 | 实体、事件、时间线 |
 | `conflict_detect` | 冲突检测 | 事件列表 | 冲突列表 |
 | `report_generate` | 报告生成与引用验证 | 全部结构化结果 | Markdown 报告、引用检查结果 |
@@ -810,7 +828,7 @@ data/
 | task_id | UUID/Text | FK tasks.id |
 | file_id | UUID/Text | FK task_files.id |
 | modality | Text | text/image/audio/video |
-| evidence_type | Text | paragraph/ocr/asr/video_frame_ocr |
+| evidence_type | Text | paragraph/ocr/asr/video_frame_ocr/image_caption/video_frame_caption |
 | content | Text | not null |
 | locator_json | Text | JSON |
 | confidence | Float | nullable |
@@ -992,11 +1010,15 @@ data/
 LOCAL_LLM_BASE_URL=http://host.docker.internal:11434/v1
 LOCAL_LLM_API_KEY=local
 LOCAL_LLM_MODEL=qwen-local
+VLM_BASE_URL=
+VLM_API_KEY=
+VLM_MODEL=
 LLM_TIMEOUT_SEC=180
 LLM_MAX_RETRIES=2
 ```
 
 后端必须封装 `LocalLLMClient`，业务代码不得直接调用 HTTP。
+视觉理解必须封装 `VisionClient`，业务 Skill 不得直接调用 HTTP。文本 LLM 与视觉 VLM 是独立端点；真实视觉模式必须配置支持图片输入的 OpenAI-compatible VLM。
 
 ```python
 class LocalLLMClient:
@@ -1053,6 +1075,7 @@ MOCK_AI=true
 - `intelligence_extract` 返回固定、确定性的示例结构；
 - `report_generate` 返回固定模板报告；
 - OCR/ASR 可使用测试 fixture 或跳过真实模型；
+- 视觉理解读取 `*.caption.json` fixture，缺失时返回确定性画面描述；
 - API、UI、权限和工作流仍可完整演示。
 
 生产演示前将其设为 `false`。
@@ -1215,6 +1238,7 @@ MOCK_AI=true
 ### NFR-001 离线运行（MUST）
 
 - 核心运行过程不得依赖公网；
+- 默认 `MOCK_AI=true` / `MOCK_MEDIA=true` 不得调用公网；真实 VLM/LLM 调用只能由部署人员显式配置端点和 key；
 - 前端不得加载 CDN；
 - 字体、图标和 JS 依赖均随应用打包；
 - 模型和 OCR/ASR 权重由部署人员提前准备。
@@ -1267,7 +1291,7 @@ MOCK_AI=true
 - PDF 只解析文本/页面，不执行嵌入内容；
 - 所有文件下载/播放接口必须经过任务权限校验；
 - 管理员操作写入审计日志；
-- 系统不得自动连接互联网或调用云模型；
+- 系统默认不得自动连接互联网或调用云模型；只有显式关闭 MOCK 并配置模型端点时才允许调用；
 - 报告必须显示“AI 辅助生成，需人工复核”。
 
 ---
@@ -1473,4 +1497,3 @@ evitrace/
 - 前端为 Vue 3；
 - 首版只支持单机单分析任务；
 - 必须提供 MOCK_AI 模式。
-

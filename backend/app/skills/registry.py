@@ -8,7 +8,7 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.constants import SKILL_STATUS_ERROR, SKILL_STATUS_HEALTHY, SKILL_STATUS_UNKNOWN
+from app.constants import SKILL_STATUS_ERROR, SKILL_STATUS_HEALTHY, SKILL_STATUS_SKIPPED, SKILL_STATUS_UNKNOWN
 from app.models import SkillConfig
 from app.schemas import AppError
 from app.utils.health_details import public_health_detail
@@ -21,12 +21,14 @@ from .image_ocr import ImageOcrSkill, resolve_ocr_model_dirs
 from .intelligence_extract import IntelligenceExtractSkill
 from .report_generate import ReportGenerateSkill
 from .video_parse import VideoParseSkill
+from .visual_understand import VisualUnderstandSkill
 
 
 document_parse = DocumentParseSkill()
 image_ocr = ImageOcrSkill()
 audio_transcribe = AudioTranscribeSkill()
 video_parse = VideoParseSkill()
+visual_understand = VisualUnderstandSkill()
 intelligence_extract = IntelligenceExtractSkill()
 conflict_detect = ConflictDetectSkill()
 report_generate = ReportGenerateSkill()
@@ -36,6 +38,7 @@ SKILL_REGISTRY = {
     "image_ocr": image_ocr,
     "audio_transcribe": audio_transcribe,
     "video_parse": video_parse,
+    "visual_understand": visual_understand,
     "intelligence_extract": intelligence_extract,
     "conflict_detect": conflict_detect,
     "report_generate": report_generate,
@@ -141,31 +144,39 @@ def check_skill_health(db: Session, skill_id: str) -> dict[str, Any]:
         config = db.get(SkillConfig, skill_id)
 
     try:
-        if skill_id == "document_parse":
-            _require_import("fitz")
-            _require_import("docx")
-            _require_import("charset_normalizer")
-        elif skill_id == "image_ocr" and not settings.effective_mock_media:
-            resolve_ocr_model_dirs()
-            _require_import("paddleocr")
-        elif skill_id == "audio_transcribe" and not settings.effective_mock_media:
-            resolve_asr_model_path()
-            _require_import("faster_whisper")
-        elif skill_id == "video_parse" and not settings.effective_mock_media:
-            if shutil.which("ffmpeg") is None:
-                raise RuntimeError("missing executable: ffmpeg")
-            resolve_ocr_model_dirs()
-            resolve_asr_model_path()
-            _require_import("paddleocr")
-            _require_import("faster_whisper")
-        elif skill_id in {"intelligence_extract", "report_generate"} and not settings.effective_mock_llm:
-            from app.services.llm_client import ping_local_llm
+        if skill_id == "visual_understand" and settings.effective_mock_vision:
+            config.last_status = SKILL_STATUS_SKIPPED
+            config.last_error = None
+        else:
+            if skill_id == "document_parse":
+                _require_import("fitz")
+                _require_import("docx")
+                _require_import("charset_normalizer")
+            elif skill_id == "image_ocr" and not settings.effective_mock_media:
+                resolve_ocr_model_dirs()
+                _require_import("paddleocr")
+            elif skill_id == "audio_transcribe" and not settings.effective_mock_media:
+                resolve_asr_model_path()
+                _require_import("faster_whisper")
+            elif skill_id == "video_parse" and not settings.effective_mock_media:
+                if shutil.which("ffmpeg") is None:
+                    raise RuntimeError("missing executable: ffmpeg")
+                resolve_ocr_model_dirs()
+                resolve_asr_model_path()
+                _require_import("paddleocr")
+                _require_import("faster_whisper")
+            elif skill_id == "visual_understand":
+                from app.services.vision_client import require_vision_config
 
-            health = ping_local_llm()
-            if health.get("status") != "healthy":
-                raise RuntimeError(health.get("message") or health.get("code") or "local llm unavailable")
-        config.last_status = SKILL_STATUS_HEALTHY
-        config.last_error = None
+                require_vision_config()
+            elif skill_id in {"intelligence_extract", "report_generate"} and not settings.effective_mock_llm:
+                from app.services.llm_client import ping_local_llm
+
+                health = ping_local_llm()
+                if health.get("status") != "healthy":
+                    raise RuntimeError(health.get("message") or health.get("code") or "local llm unavailable")
+            config.last_status = SKILL_STATUS_HEALTHY
+            config.last_error = None
     except Exception as exc:
         config.last_status = SKILL_STATUS_ERROR
         config.last_error = public_health_detail(exc)

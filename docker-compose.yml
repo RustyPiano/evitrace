@@ -16,11 +16,17 @@ services:
       LOCAL_LLM_BASE_URL: ${LOCAL_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
       LOCAL_LLM_API_KEY: ${LOCAL_LLM_API_KEY:-local}
       LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-qwen-local}
+      VLM_BASE_URL: ${VLM_BASE_URL:-}
+      VLM_API_KEY: ${VLM_API_KEY:-}
+      VLM_MODEL: ${VLM_MODEL:-}
       LLM_TIMEOUT_SEC: ${LLM_TIMEOUT_SEC:-180}
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
       # The provided backend image is MOCK-only: keep this true unless you build
       # a custom image with ffmpeg, requirements-optional.txt, and mounted local models.
       MOCK_AI: ${MOCK_AI:-true}
+      MOCK_LLM: ${MOCK_LLM:-}
+      MOCK_MEDIA: ${MOCK_MEDIA:-}
+      MOCK_VISION: ${MOCK_VISION:-}
       OCR_MODEL_DIR: ${OCR_MODEL_DIR:-}
       ASR_MODEL_DIR: ${ASR_MODEL_DIR:-}
       ASR_MODEL_SIZE: ${ASR_MODEL_SIZE:-small}
@@ -38,7 +44,7 @@ services:
       - /tmp
     restart: unless-stopped
     healthcheck:
-      # Liveness only. Real-mode OCR/ASR/video/LLM readiness needs a custom image/check.
+      # Liveness only. Real-mode OCR/ASR/video/LLM/VLM readiness needs a custom image/check.
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health"]
       interval: 10s
       timeout: 5s
