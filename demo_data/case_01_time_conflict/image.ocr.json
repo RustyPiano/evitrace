@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "text": "Board text: Delta check-in 14:00, Harbor Gate, 3 vehicles.",
+      "bbox": [
+        56,
+        132,
+        920,
+        238
+      ],
+      "confidence": 0.94
+    }
+  ]
+}

@@ -1,0 +1,114 @@
+{
+  "entities": [
+    {
+      "type": "location",
+      "name": "Harbor Gate",
+      "match": "Harbor Gate",
+      "confidence": 0.86
+    },
+    {
+      "type": "quantity",
+      "name": "3 vehicles",
+      "match": "3",
+      "confidence": 0.84
+    }
+  ],
+  "events": [
+    {
+      "event_key": "Delta-convoy-check-in",
+      "title": "Delta convoy checkpoint report",
+      "subject": "Delta convoy",
+      "action": "checked in",
+      "object": "checkpoint",
+      "time_text": "14:00",
+      "time_normalized": "2026-06-01T14:00:00",
+      "location": "Harbor Gate",
+      "quantity": {
+        "value": 3,
+        "unit": "vehicles"
+      },
+      "match": "Brief note: Delta convoy checked in at 14:00 at Harbor Gate with 3 vehicles",
+      "confidence": 0.88
+    },
+    {
+      "event_key": "Delta-convoy-check-in",
+      "title": "Delta convoy checkpoint report",
+      "subject": "Delta convoy",
+      "action": "checked in",
+      "object": "checkpoint",
+      "time_text": "14:00",
+      "time_normalized": "2026-06-01T14:00:00",
+      "location": "Harbor Gate",
+      "quantity": {
+        "value": 3,
+        "unit": "vehicles"
+      },
+      "match": "Report check: Delta checkpoint remained listed as 14:00 in the duty roster",
+      "confidence": 0.88
+    },
+    {
+      "event_key": "Delta-convoy-check-in",
+      "title": "Delta convoy checkpoint report",
+      "subject": "Delta convoy",
+      "action": "checked in",
+      "object": "checkpoint",
+      "time_text": "14:00",
+      "time_normalized": "2026-06-01T14:00:00",
+      "location": "Harbor Gate",
+      "quantity": {
+        "value": 3,
+        "unit": "vehicles"
+      },
+      "match": "Board text: Delta check-in 14:00, Harbor Gate, 3 vehicles.",
+      "confidence": 0.88
+    },
+    {
+      "event_key": "Delta-convoy-check-in",
+      "title": "Delta convoy checkpoint report",
+      "subject": "Delta convoy",
+      "action": "checked in",
+      "object": "checkpoint",
+      "time_text": "16:30",
+      "time_normalized": "2026-06-01T16:30:00",
+      "location": "Harbor Gate",
+      "quantity": {
+        "value": 3,
+        "unit": "vehicles"
+      },
+      "match": "Radio transcript: Delta check-in was actually 16:30 at Harbor Gate with 3 vehicles.",
+      "confidence": 0.88
+    },
+    {
+      "event_key": "Delta-convoy-check-in",
+      "title": "Delta convoy checkpoint report",
+      "subject": "Delta convoy",
+      "action": "checked in",
+      "object": "checkpoint",
+      "time_text": "16:30",
+      "time_normalized": "2026-06-01T16:30:00",
+      "location": "Harbor Gate",
+      "quantity": {
+        "value": 3,
+        "unit": "vehicles"
+      },
+      "match": "Video audio: Delta convoy check-in time is 16:30 at Harbor Gate.",
+      "confidence": 0.88
+    },
+    {
+      "event_key": "Delta-convoy-check-in",
+      "title": "Delta convoy checkpoint report",
+      "subject": "Delta convoy",
+      "action": "checked in",
+      "object": "checkpoint",
+      "time_text": "16:30",
+      "time_normalized": "2026-06-01T16:30:00",
+      "location": "Harbor Gate",
+      "quantity": {
+        "value": 3,
+        "unit": "vehicles"
+      },
+      "match": "Video slate shows Delta check-in 16:30.",
+      "confidence": 0.88
+    }
+  ]
+}

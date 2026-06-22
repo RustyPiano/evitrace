@@ -1,0 +1,3 @@
+Brief note: Echo team delivered 2 medical crates at North Pier at 09:15.
+
+The note is fictional and exists only for deterministic testing.

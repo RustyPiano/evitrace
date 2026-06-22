@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "text": "Whiteboard: Foxtrot patrol count 3 vehicles at Training Yard.",
+      "bbox": [
+        56,
+        132,
+        920,
+        238
+      ],
+      "confidence": 0.94
+    }
+  ]
+}

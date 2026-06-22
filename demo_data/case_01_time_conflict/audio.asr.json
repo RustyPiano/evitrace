@@ -1,0 +1,10 @@
+{
+  "segments": [
+    {
+      "text": "Radio transcript: Delta check-in was actually 16:30 at Harbor Gate with 3 vehicles.",
+      "start_ms": 1200,
+      "end_ms": 5200,
+      "confidence": 0.91
+    }
+  ]
+}

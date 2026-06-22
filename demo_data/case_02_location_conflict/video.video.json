@@ -1,0 +1,23 @@
+{
+  "audio_segments": [
+    {
+      "text": "Video audio: Echo team delivery point is East Warehouse.",
+      "start_ms": 800,
+      "end_ms": 4800,
+      "confidence": 0.9
+    }
+  ],
+  "frames": [
+    {
+      "text": "Video slate shows East Warehouse for Echo team.",
+      "timestamp_ms": 2000,
+      "bbox": [
+        54,
+        118,
+        910,
+        226
+      ],
+      "confidence": 0.93
+    }
+  ]
+}

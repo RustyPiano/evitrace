@@ -45,6 +45,15 @@ def _upload_text(client, headers, task_id: str) -> str:
     return response.json()["data"][0]["id"]
 
 
+def _admin_create_analyst(client, admin_headers, username: str) -> None:
+    response = client.post(
+        "/api/v1/admin/users",
+        headers=admin_headers,
+        json={"username": username, "password": "password", "role": "analyst"},
+    )
+    assert response.status_code == 201
+
+
 def test_analysis_mock_flow_results_patch_download_and_rerun(client, create_user):
     create_user("owner")
     headers = login_headers(client, "owner", "password")
@@ -279,3 +288,58 @@ def test_download_report_filename_uses_result_updated_at_and_sanitizes_task_name
     assert response.status_code == 200
     filename = unquote(response.headers["content-disposition"])
     assert "Bad_Name_Case_分析报告_20260601_1430.md" in filename
+
+
+def test_full_flow_enforces_two_analyst_boundary_and_admin_access(client):
+    admin_headers = login_headers(client, "admin", "admin-password")
+    _admin_create_analyst(client, admin_headers, "analyst-a")
+    _admin_create_analyst(client, admin_headers, "analyst-b")
+    analyst_a_headers = login_headers(client, "analyst-a", "password")
+    analyst_b_headers = login_headers(client, "analyst-b", "password")
+
+    task_id = _create_task(client, analyst_a_headers, "M5 Access Case")
+    _upload_text(client, analyst_a_headers, task_id)
+
+    assert client.get(f"/api/v1/tasks/{task_id}", headers=analyst_b_headers).status_code == 404
+    assert client.get(f"/api/v1/tasks/{task_id}/evidence", headers=analyst_b_headers).status_code == 404
+
+    start_response = client.post(f"/api/v1/tasks/{task_id}/runs", headers=analyst_a_headers)
+    assert start_response.status_code == 202
+    run_response = client.get(f"/api/v1/tasks/{task_id}/runs/latest", headers=analyst_a_headers)
+    assert run_response.status_code == 200
+    assert run_response.json()["data"]["status"] == RUN_STATUS_SUCCEEDED
+    assert run_response.json()["data"]["current_step"] == "awaiting_review"
+
+    denied_after_run = client.get(f"/api/v1/tasks/{task_id}/results", headers=analyst_b_headers)
+    assert denied_after_run.status_code == 404
+
+    evidence_response = client.get(f"/api/v1/tasks/{task_id}/evidence", headers=analyst_a_headers)
+    assert evidence_response.status_code == 200
+    assert evidence_response.json()["data"]["total"] >= 2
+
+    results_response = client.get(f"/api/v1/tasks/{task_id}/results", headers=analyst_a_headers)
+    assert results_response.status_code == 200
+    results = results_response.json()["data"]
+    assert len(results["events"]) >= 2
+    assert {conflict["type"] for conflict in results["conflicts"]} >= {"time", "location", "quantity"}
+    assert results["citation_check"]["invalid_citations"] == []
+    assert results["citation_check"]["citation_coverage"] >= 0.9
+
+    conflict_id = results["conflicts"][0]["conflict_id"]
+    patch_response = client.patch(
+        f"/api/v1/tasks/{task_id}/conflicts/{conflict_id}",
+        headers=analyst_a_headers,
+        json={"status": "confirmed"},
+    )
+    assert patch_response.status_code == 200
+    assert patch_response.json()["data"]["status"] == "confirmed"
+
+    download_response = client.get(f"/api/v1/tasks/{task_id}/report/download", headers=analyst_a_headers)
+    assert download_response.status_code == 200
+    assert "# M5 Access Case" in download_response.text
+
+    admin_task_response = client.get(f"/api/v1/tasks/{task_id}", headers=admin_headers)
+    admin_results_response = client.get(f"/api/v1/tasks/{task_id}/results", headers=admin_headers)
+    assert admin_task_response.status_code == 200
+    assert admin_results_response.status_code == 200
+    assert admin_results_response.json()["data"]["task_id"] == task_id

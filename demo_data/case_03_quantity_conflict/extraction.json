@@ -1,0 +1,120 @@
+{
+  "entities": [
+    {
+      "type": "location",
+      "name": "Training Yard",
+      "match": "Training Yard",
+      "confidence": 0.86
+    },
+    {
+      "type": "quantity",
+      "name": "3 vehicles",
+      "match": "3",
+      "confidence": 0.84
+    },
+    {
+      "type": "quantity",
+      "name": "5 vehicles",
+      "match": "5",
+      "confidence": 0.84
+    }
+  ],
+  "events": [
+    {
+      "event_key": "Foxtrot-patrol-vehicle-count",
+      "title": "Foxtrot patrol vehicle count",
+      "subject": "Foxtrot patrol",
+      "action": "counted",
+      "object": "utility vehicles",
+      "time_text": "11:20",
+      "time_normalized": "2026-06-03T11:20:00",
+      "location": "Training Yard",
+      "quantity": {
+        "value": 3,
+        "unit": "vehicles"
+      },
+      "match": "Brief note: Foxtrot patrol counted 3 utility vehicles at Training Yard at 11:20",
+      "confidence": 0.88
+    },
+    {
+      "event_key": "Foxtrot-patrol-vehicle-count",
+      "title": "Foxtrot patrol vehicle count",
+      "subject": "Foxtrot patrol",
+      "action": "counted",
+      "object": "utility vehicles",
+      "time_text": "11:20",
+      "time_normalized": "2026-06-03T11:20:00",
+      "location": "Training Yard",
+      "quantity": {
+        "value": 3,
+        "unit": "vehicles"
+      },
+      "match": "Report check: The maintenance summary also records three vehicles for Foxtrot patrol",
+      "confidence": 0.88
+    },
+    {
+      "event_key": "Foxtrot-patrol-vehicle-count",
+      "title": "Foxtrot patrol vehicle count",
+      "subject": "Foxtrot patrol",
+      "action": "counted",
+      "object": "utility vehicles",
+      "time_text": "11:20",
+      "time_normalized": "2026-06-03T11:20:00",
+      "location": "Training Yard",
+      "quantity": {
+        "value": 3,
+        "unit": "vehicles"
+      },
+      "match": "Whiteboard: Foxtrot patrol count 3 vehicles at Training Yard.",
+      "confidence": 0.88
+    },
+    {
+      "event_key": "Foxtrot-patrol-vehicle-count",
+      "title": "Foxtrot patrol vehicle count",
+      "subject": "Foxtrot patrol",
+      "action": "counted",
+      "object": "utility vehicles",
+      "time_text": "11:20",
+      "time_normalized": "2026-06-03T11:20:00",
+      "location": "Training Yard",
+      "quantity": {
+        "value": 5,
+        "unit": "vehicles"
+      },
+      "match": "Radio transcript: Foxtrot patrol counted 5 vehicles at Training Yard.",
+      "confidence": 0.88
+    },
+    {
+      "event_key": "Foxtrot-patrol-vehicle-count",
+      "title": "Foxtrot patrol vehicle count",
+      "subject": "Foxtrot patrol",
+      "action": "counted",
+      "object": "utility vehicles",
+      "time_text": "11:20",
+      "time_normalized": "2026-06-03T11:20:00",
+      "location": "Training Yard",
+      "quantity": {
+        "value": 5,
+        "unit": "vehicles"
+      },
+      "match": "Video audio: Foxtrot patrol count is 5 vehicles.",
+      "confidence": 0.88
+    },
+    {
+      "event_key": "Foxtrot-patrol-vehicle-count",
+      "title": "Foxtrot patrol vehicle count",
+      "subject": "Foxtrot patrol",
+      "action": "counted",
+      "object": "utility vehicles",
+      "time_text": "11:20",
+      "time_normalized": "2026-06-03T11:20:00",
+      "location": "Training Yard",
+      "quantity": {
+        "value": 5,
+        "unit": "vehicles"
+      },
+      "match": "Video slate shows Foxtrot count 5 vehicles.",
+      "confidence": 0.88
+    }
+  ]
+}

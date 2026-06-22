@@ -1,0 +1,120 @@
+{
+  "entities": [
+    {
+      "type": "location",
+      "name": "North Pier",
+      "match": "North Pier",
+      "confidence": 0.86
+    },
+    {
+      "type": "quantity",
+      "name": "2 crates",
+      "match": "2",
+      "confidence": 0.84
+    },
+    {
+      "type": "location",
+      "name": "East Warehouse",
+      "match": "East Warehouse",
+      "confidence": 0.86
+    }
+  ],
+  "events": [
+    {
+      "event_key": "Echo-team-delivery",
+      "title": "Echo team delivery point",
+      "subject": "Echo team",
+      "action": "delivered",
+      "object": "medical crates",
+      "time_text": "09:15",
+      "time_normalized": "2026-06-02T09:15:00",
+      "location": "North Pier",
+      "quantity": {
+        "value": 2,
+        "unit": "crates"
+      },
+      "match": "Brief note: Echo team delivered 2 medical crates at North Pier at 09:15",
+      "confidence": 0.88
+    },
+    {
+      "event_key": "Echo-team-delivery",
+      "title": "Echo team delivery point",
+      "subject": "Echo team",
+      "action": "delivered",
+      "object": "medical crates",
+      "time_text": "09:15",
+      "time_normalized": "2026-06-02T09:15:00",
+      "location": "North Pier",
+      "quantity": {
+        "value": 2,
+        "unit": "crates"
+      },
+      "match": "Report check: The logistics sheet repeats North Pier as the delivery point",
+      "confidence": 0.88
+    },
+    {
+      "event_key": "Echo-team-delivery",
+      "title": "Echo team delivery point",
+      "subject": "Echo team",
+      "action": "delivered",
+      "object": "medical crates",
+      "time_text": "09:15",
+      "time_normalized": "2026-06-02T09:15:00",
+      "location": "North Pier",
+      "quantity": {
+        "value": 2,
+        "unit": "crates"
+      },
+      "match": "Gate sign: Echo team delivery point East Warehouse, 2 crates, 09:15.",
+      "confidence": 0.88
+    },
+    {
+      "event_key": "Echo-team-delivery",
+      "title": "Echo team delivery point",
+      "subject": "Echo team",
+      "action": "delivered",
+      "object": "medical crates",
+      "time_text": "09:15",
+      "time_normalized": "2026-06-02T09:15:00",
+      "location": "East Warehouse",
+      "quantity": {
+        "value": 2,
+        "unit": "crates"
+      },
+      "match": "Radio transcript: Echo team confirms North Pier delivery point at 09:15.",
+      "confidence": 0.88
+    },
+    {
+      "event_key": "Echo-team-delivery",
+      "title": "Echo team delivery point",
+      "subject": "Echo team",
+      "action": "delivered",
+      "object": "medical crates",
+      "time_text": "09:15",
+      "time_normalized": "2026-06-02T09:15:00",
+      "location": "East Warehouse",
+      "quantity": {
+        "value": 2,
+        "unit": "crates"
+      },
+      "match": "Video audio: Echo team delivery point is East Warehouse.",
+      "confidence": 0.88
+    },
+    {
+      "event_key": "Echo-team-delivery",
+      "title": "Echo team delivery point",
+      "subject": "Echo team",
+      "action": "delivered",
+      "object": "medical crates",
+      "time_text": "09:15",
+      "time_normalized": "2026-06-02T09:15:00",
+      "location": "East Warehouse",
+      "quantity": {
+        "value": 2,
+        "unit": "crates"
+      },
+      "match": "Video slate shows East Warehouse for Echo team.",
+      "confidence": 0.88
+    }
+  ]
+}

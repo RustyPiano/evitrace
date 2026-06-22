@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "text": "Gate sign: Echo team delivery point East Warehouse, 2 crates, 09:15.",
+      "bbox": [
+        56,
+        132,
+        920,
+        238
+      ],
+      "confidence": 0.94
+    }
+  ]
+}

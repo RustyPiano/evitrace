@@ -1,0 +1,23 @@
+{
+  "audio_segments": [
+    {
+      "text": "Video audio: Foxtrot patrol count is 5 vehicles.",
+      "start_ms": 800,
+      "end_ms": 4800,
+      "confidence": 0.9
+    }
+  ],
+  "frames": [
+    {
+      "text": "Video slate shows Foxtrot count 5 vehicles.",
+      "timestamp_ms": 2000,
+      "bbox": [
+        54,
+        118,
+        910,
+        226
+      ],
+      "confidence": 0.93
+    }
+  ]
+}

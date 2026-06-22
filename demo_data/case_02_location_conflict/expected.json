@@ -1,0 +1,17 @@
+{
+  "expected_entities": [],
+  "expected_events": [],
+  "expected_conflicts": [
+    {
+      "type": "location",
+      "left": "North Pier",
+      "right": "East Warehouse"
+    }
+  ],
+  "required_evidence_modalities": [
+    "text",
+    "image",
+    "audio",
+    "video"
+  ]
+}

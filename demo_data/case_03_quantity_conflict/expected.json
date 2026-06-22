@@ -1,0 +1,17 @@
+{
+  "expected_entities": [],
+  "expected_events": [],
+  "expected_conflicts": [
+    {
+      "type": "quantity",
+      "left": "3 vehicles",
+      "right": "5 vehicles"
+    }
+  ],
+  "required_evidence_modalities": [
+    "text",
+    "image",
+    "audio",
+    "video"
+  ]
+}

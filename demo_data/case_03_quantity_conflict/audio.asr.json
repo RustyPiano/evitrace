@@ -1,0 +1,10 @@
+{
+  "segments": [
+    {
+      "text": "Radio transcript: Foxtrot patrol counted 5 vehicles at Training Yard.",
+      "start_ms": 1200,
+      "end_ms": 5200,
+      "confidence": 0.91
+    }
+  ]
+}

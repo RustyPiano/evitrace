@@ -1,0 +1,17 @@
+{
+  "expected_entities": [],
+  "expected_events": [],
+  "expected_conflicts": [
+    {
+      "type": "time",
+      "left": "14:00",
+      "right": "16:30"
+    }
+  ],
+  "required_evidence_modalities": [
+    "text",
+    "image",
+    "audio",
+    "video"
+  ]
+}
