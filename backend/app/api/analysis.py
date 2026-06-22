@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.dependencies import get_current_user, get_db
-from app.models import AnalysisResult, Evidence, Task, User
+from app.models import AnalysisResult, Evidence, Task, TaskRun, User
 from app.schemas import AppError
 from app.schemas_analysis import ConflictStatusUpdate
 from app.services import orchestrator, result_service
@@ -40,16 +40,24 @@ def _safe_filename_part(value: str | None) -> str:
     return cleaned or "未命名任务"
 
 
-def _analysis_result(db: Session, task_id: str, current_user: User) -> tuple[Task, AnalysisResult]:
+def _analysis_result(
+    db: Session,
+    task_id: str,
+    current_user: User,
+    run_id: str | None = None,
+) -> tuple[Task, AnalysisResult]:
     task = ensure_task_access(db, task_id, current_user)
-    result = db.query(AnalysisResult).filter(AnalysisResult.task_id == task.id).first()
-    if result is None:
-        raise AppError("TASK_NOT_FOUND", "任务不存在或无权访问", status.HTTP_404_NOT_FOUND)
+    result = result_service.resolve_result(db, task.id, run_id)
     return task, result
 
 
-def _evidence_payload(db: Session, task_id: str) -> list[dict]:
-    evidence = db.query(Evidence).filter(Evidence.task_id == task_id).order_by(Evidence.display_id.asc()).all()
+def _evidence_payload(db: Session, result: AnalysisResult) -> list[dict]:
+    evidence = (
+        db.query(Evidence)
+        .filter(Evidence.task_id == result.task_id, Evidence.run_id == result.run_id)
+        .order_by(Evidence.display_id.asc())
+        .all()
+    )
     return [
         {
             "id": item.id,
@@ -89,6 +97,17 @@ def _serialize_result(result: AnalysisResult) -> dict:
     }
 
 
+def _serialize_run_summary(run: TaskRun, has_result: bool) -> dict:
+    return {
+        "run_id": run.id,
+        "status": run.status,
+        "progress": run.progress,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "has_result": has_result,
+    }
+
+
 @router.post("/tasks/{task_id}/runs", status_code=status.HTTP_202_ACCEPTED)
 def start_analysis_run(
     task_id: str,
@@ -120,13 +139,37 @@ def get_latest_run(
     return {"data": orchestrator.serialize_run(run), "message": "ok"}
 
 
-@router.get("/tasks/{task_id}/results")
-def get_results(
+@router.get("/tasks/{task_id}/runs")
+def list_runs(
     task_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    _, result = _analysis_result(db, task_id, current_user)
+    task = ensure_task_access(db, task_id, current_user)
+    result_run_ids = {
+        row[0]
+        for row in db.query(AnalysisResult.run_id).filter(AnalysisResult.task_id == task.id).all()
+    }
+    runs = (
+        db.query(TaskRun)
+        .filter(TaskRun.task_id == task.id)
+        .order_by(TaskRun.started_at.desc().nullslast(), TaskRun.finished_at.desc().nullslast())
+        .all()
+    )
+    return {
+        "data": [_serialize_run_summary(run, run.id in result_run_ids) for run in runs],
+        "message": "ok",
+    }
+
+
+@router.get("/tasks/{task_id}/results")
+def get_results(
+    task_id: str,
+    run_id: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    _, result = _analysis_result(db, task_id, current_user, run_id)
     return {"data": _serialize_result(result), "message": "ok"}
 
 
@@ -135,10 +178,11 @@ def update_conflict_status(
     task_id: str,
     conflict_id: str,
     payload: ConflictStatusUpdate,
+    run_id: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    _, result = _analysis_result(db, task_id, current_user)
+    _, result = _analysis_result(db, task_id, current_user, run_id)
     conflicts = _loads(result.conflicts_json, [])
     for conflict in conflicts:
         if conflict.get("conflict_id") == conflict_id:
@@ -152,10 +196,11 @@ def update_conflict_status(
 @router.post("/tasks/{task_id}/report/regenerate")
 def regenerate_report(
     task_id: str,
+    run_id: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    task, result = _analysis_result(db, task_id, current_user)
+    task, result = _analysis_result(db, task_id, current_user, run_id)
     context = SkillContext(task_id=task.id, run_id=result.run_id, data_root=str(settings.data_root_path))
     report_result = ReportGenerateSkill().run(
         context,
@@ -166,7 +211,7 @@ def regenerate_report(
                 "objective": task.objective,
                 "description": task.description,
             },
-            "evidence": _evidence_payload(db, task.id),
+            "evidence": _evidence_payload(db, result),
             "entities": _loads(result.entities_json, []),
             "events": _loads(result.events_json, []),
             "timeline": _loads(result.timeline_json, []),
@@ -189,16 +234,22 @@ def regenerate_report(
 @router.get("/tasks/{task_id}/report/download")
 def download_report(
     task_id: str,
+    run_id: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    task, result = _analysis_result(db, task_id, current_user)
-    report_path = Path(settings.data_root_path) / "tasks" / task.id / "reports" / "latest.md"
+    task, result = _analysis_result(db, task_id, current_user, run_id)
+    reports_dir = Path(settings.data_root_path) / "tasks" / task.id / "reports"
+    report_path = reports_dir / ("latest.md" if run_id is None else f"{result.run_id}.md")
     if not report_path.is_file():
         if not result.report_markdown:
             raise AppError("TASK_NOT_FOUND", "任务不存在或无权访问", status.HTTP_404_NOT_FOUND)
-        context = SkillContext(task_id=task.id, run_id=result.run_id, data_root=str(settings.data_root_path))
-        write_latest_report(context, result.report_markdown)
+        if run_id is None:
+            context = SkillContext(task_id=task.id, run_id=result.run_id, data_root=str(settings.data_root_path))
+            write_latest_report(context, result.report_markdown)
+        else:
+            reports_dir.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(result.report_markdown, encoding="utf-8")
 
     report_time = result.updated_at or result.created_at or datetime.now()
     timestamp = report_time.strftime("%Y%m%d_%H%M")

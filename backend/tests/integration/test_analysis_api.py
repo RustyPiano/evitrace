@@ -102,8 +102,13 @@ def test_analysis_mock_flow_results_patch_download_and_rerun(client, create_user
     assert "分析报告" in unquote(download_response.headers["content-disposition"])
 
     with SessionLocal() as db:
-        old_evidence_ids = {row.id for row in db.query(Evidence).filter(Evidence.task_id == task_id)}
-        first_result_id = db.query(AnalysisResult).filter(AnalysisResult.task_id == task_id).one().id
+        first_evidence = db.query(Evidence).filter(Evidence.task_id == task_id).order_by(Evidence.display_id).all()
+        first_evidence_ids = {row.id for row in first_evidence}
+        first_display_ids = [row.display_id for row in first_evidence]
+        assert first_evidence
+        assert {row.run_id for row in first_evidence} == {first_run_id}
+        first_result = db.query(AnalysisResult).filter(AnalysisResult.task_id == task_id).one()
+        first_result_id = first_result.id
 
     rerun_response = client.post(f"/api/v1/tasks/{task_id}/runs", headers=headers)
     assert rerun_response.status_code == 202
@@ -113,13 +118,39 @@ def test_analysis_mock_flow_results_patch_download_and_rerun(client, create_user
     with SessionLocal() as db:
         task = db.get(Task, task_id)
         runs = db.query(TaskRun).filter(TaskRun.task_id == task_id).order_by(TaskRun.started_at.asc()).all()
-        new_evidence_ids = {row.id for row in db.query(Evidence).filter(Evidence.task_id == task_id)}
-        result = db.query(AnalysisResult).filter(AnalysisResult.task_id == task_id).one()
+        all_evidence = db.query(Evidence).filter(Evidence.task_id == task_id).order_by(Evidence.display_id).all()
+        second_evidence = [row for row in all_evidence if row.run_id == second_run_id]
+        results = db.query(AnalysisResult).filter(AnalysisResult.task_id == task_id).order_by(AnalysisResult.created_at).all()
         assert task.status == TASK_STATUS_AWAITING_REVIEW
         assert [run.id for run in runs] == [first_run_id, second_run_id]
-        assert old_evidence_ids.isdisjoint(new_evidence_ids)
-        assert result.id != first_result_id
-        assert result.run_id == second_run_id
+        assert first_evidence_ids.issubset({row.id for row in all_evidence})
+        assert len(results) == 2
+        assert [result.run_id for result in results] == [first_run_id, second_run_id]
+        assert results[0].id == first_result_id
+        assert first_display_ids[-1] < second_evidence[0].display_id
+        assert {row.run_id for row in second_evidence} == {second_run_id}
+
+    latest_results = client.get(f"/api/v1/tasks/{task_id}/results", headers=headers).json()["data"]
+    historical_results = client.get(
+        f"/api/v1/tasks/{task_id}/results?run_id={first_run_id}",
+        headers=headers,
+    ).json()["data"]
+    assert latest_results["run_id"] == second_run_id
+    assert historical_results["run_id"] == first_run_id
+
+    latest_evidence = client.get(f"/api/v1/tasks/{task_id}/evidence", headers=headers).json()["data"]
+    historical_evidence = client.get(
+        f"/api/v1/tasks/{task_id}/evidence?run_id={first_run_id}",
+        headers=headers,
+    ).json()["data"]
+    assert {item["id"] for item in latest_evidence["items"]} == {row.id for row in second_evidence}
+    assert {item["id"] for item in historical_evidence["items"]} == first_evidence_ids
+
+    runs_response = client.get(f"/api/v1/tasks/{task_id}/runs", headers=headers)
+    assert runs_response.status_code == 200
+    listed_runs = runs_response.json()["data"]
+    assert [item["run_id"] for item in listed_runs] == [second_run_id, first_run_id]
+    assert all(item["has_result"] for item in listed_runs)
 
 
 def test_start_run_rejects_task_without_files(client, create_user):

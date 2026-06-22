@@ -2,8 +2,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, status
 from sqlalchemy.orm import Session
 
 from app.dependencies import get_current_user, get_db
-from app.constants import TASK_RUNNING_STATUSES, TASK_STATUS_PARSING
-from app.models import TaskFile, User
+from app.constants import RUN_STATUS_RUNNING, TASK_RUNNING_STATUSES, TASK_STATUS_PARSING
+from app.models import TaskFile, TaskRun, User, utc_now
 from app.schemas import AppError
 from app.services import parse_service
 from app.schemas import TaskCreate, TaskUpdate
@@ -80,7 +80,18 @@ def parse_task_files(
 
         task.status = TASK_STATUS_PARSING
         task.last_error = None
+        run = TaskRun(
+            task_id=task.id,
+            status=RUN_STATUS_RUNNING,
+            progress=0,
+            current_step="parsing",
+            warnings_json="[]",
+            plan_json='{"steps":[{"order":1,"skill":"parse_files"}]}',
+            started_at=utc_now(),
+        )
+        db.add(run)
         db.commit()
+        db.refresh(run)
 
-    background_tasks.add_task(parse_service.parse_task_files_for_endpoint, task.id)
-    return {"data": {"task_id": task.id, "status": TASK_STATUS_PARSING}, "message": "ok"}
+    background_tasks.add_task(parse_service.parse_task_files_for_endpoint, task.id, run.id)
+    return {"data": {"task_id": task.id, "run_id": run.id, "status": TASK_STATUS_PARSING}, "message": "ok"}

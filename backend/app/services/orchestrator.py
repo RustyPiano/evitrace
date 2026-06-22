@@ -164,8 +164,8 @@ def _serialize_evidence_for_analysis(evidence: Evidence) -> dict[str, Any]:
     }
 
 
-def _list_evidence(db: Session, task_id: str) -> list[dict[str, Any]]:
-    rows = db.query(Evidence).filter(Evidence.task_id == task_id).order_by(Evidence.display_id.asc()).all()
+def _list_evidence(db: Session, run_id: str) -> list[dict[str, Any]]:
+    rows = db.query(Evidence).filter(Evidence.run_id == run_id).order_by(Evidence.display_id.asc()).all()
     return [_serialize_evidence_for_analysis(row) for row in rows]
 
 
@@ -189,8 +189,6 @@ def start_run(db: Session, task_id: str, current_user) -> TaskRun:
             raise AppError("TASK_ALREADY_RUNNING", "已有任务运行", status.HTTP_409_CONFLICT)
         run_guard.ensure_no_active_run(db)
         _ensure_required_skills_enabled(db)
-        _delete_previous_outputs(db, task.id)
-
         files = db.query(TaskFile).filter(TaskFile.task_id == task.id).order_by(TaskFile.created_at.asc()).all()
         run = TaskRun(
             task_id=task.id,
@@ -219,7 +217,6 @@ def _create_run_without_user(db: Session, task_id: str) -> TaskRun:
         raise AppError("TASK_NOT_READY", "无可分析文件", status.HTTP_409_CONFLICT)
     run_guard.ensure_no_active_run(db)
     _ensure_required_skills_enabled(db)
-    _delete_previous_outputs(db, task.id)
     files = db.query(TaskFile).filter(TaskFile.task_id == task.id).order_by(TaskFile.created_at.asc()).all()
     run = TaskRun(
         task_id=task.id,
@@ -277,7 +274,7 @@ def execute_run(task_id: str, run_id: str) -> None:
             warnings.extend(parse_summary.errors)
             _update_state(db, task, run, task_status=TASK_STATUS_PARSING, progress=45, current_step="parsing")
 
-            evidence_items = _list_evidence(db, task_id)
+            evidence_items = _list_evidence(db, run.id)
             if not evidence_items:
                 raise AppError(
                     "ANALYSIS_FAILED",

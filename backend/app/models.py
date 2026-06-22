@@ -56,7 +56,7 @@ class Task(Base):
     files: Mapped[list["TaskFile"]] = relationship(back_populates="task")
     runs: Mapped[list["TaskRun"]] = relationship(back_populates="task")
     evidence_items: Mapped[list["Evidence"]] = relationship(back_populates="task")
-    analysis_result: Mapped["AnalysisResult | None"] = relationship(back_populates="task")
+    analysis_results: Mapped[list["AnalysisResult"]] = relationship(back_populates="task")
 
 
 class TaskFile(Base):
@@ -105,6 +105,7 @@ class Evidence(Base):
     id: Mapped[str] = mapped_column(Text, primary_key=True, default=uuid_text)
     display_id: Mapped[str] = mapped_column(Text, nullable=False)
     task_id: Mapped[str] = mapped_column(Text, ForeignKey("tasks.id"), nullable=False, index=True)
+    run_id: Mapped[str | None] = mapped_column(Text, ForeignKey("task_runs.id"), nullable=True, index=True)
     file_id: Mapped[str] = mapped_column(Text, ForeignKey("task_files.id"), nullable=False, index=True)
     modality: Mapped[str] = mapped_column(Text, nullable=False)
     evidence_type: Mapped[str] = mapped_column(Text, nullable=False)
@@ -122,9 +123,7 @@ class AnalysisResult(Base):
     __tablename__ = "analysis_results"
 
     id: Mapped[str] = mapped_column(Text, primary_key=True, default=uuid_text)
-    task_id: Mapped[str] = mapped_column(
-        Text, ForeignKey("tasks.id"), nullable=False, unique=True, index=True
-    )
+    task_id: Mapped[str] = mapped_column(Text, ForeignKey("tasks.id"), nullable=False, index=True)
     run_id: Mapped[str] = mapped_column(Text, ForeignKey("task_runs.id"), nullable=False, index=True)
     entities_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     events_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
@@ -137,7 +136,7 @@ class AnalysisResult(Base):
         DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
     )
 
-    task: Mapped[Task] = relationship(back_populates="analysis_result")
+    task: Mapped[Task] = relationship(back_populates="analysis_results")
     run: Mapped[TaskRun] = relationship(back_populates="analysis_results")
 
 

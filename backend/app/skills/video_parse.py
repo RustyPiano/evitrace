@@ -23,12 +23,27 @@ def _append_warning_once(warnings: list[str], warning: str) -> None:
         warnings.append(warning)
 
 
+def _run_derived_dir(context: SkillContext, name: str) -> Path:
+    if context.run_id:
+        directory = derived_path(context, f"derived/runs/{context.run_id}/{name}")
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
+    return ensure_derived_dir(context, name)
+
+
+def _run_derived_root(context: SkillContext, name: str) -> Path:
+    if context.run_id:
+        return derived_path(context, f"derived/runs/{context.run_id}/{name}")
+    return derived_path(context, f"derived/{name}")
+
+
 def _write_placeholder_frame(context: SkillContext, file_info: dict[str, Any], index: int) -> str:
-    frames_dir = ensure_derived_dir(context, "frames")
+    frames_dir = _run_derived_dir(context, "frames")
+    frames_root = _run_derived_root(context, "frames")
     filename = f"{file_info['id']}_mock_frame_{index:06d}.png"
     path = (frames_dir / filename).resolve()
-    if not path.is_relative_to(derived_path(context, "derived/frames")):
-        raise ValueError("frame path escaped derived/frames")
+    if not path.is_relative_to(frames_root):
+        raise ValueError("frame path escaped derived frames")
 
     from PIL import Image, ImageDraw
 
@@ -38,7 +53,7 @@ def _write_placeholder_frame(context: SkillContext, file_info: dict[str, Any], i
     draw.text((42, 42), "EviTrace MOCK FRAME", fill=(255, 255, 255))
     draw.text((42, 78), file_info["original_name"], fill=(203, 213, 225))
     image.save(path, format="PNG")
-    return f"derived/frames/{filename}"
+    return path.relative_to(derived_path(context, "")).as_posix()
 
 
 def _frame_evidence(item: dict[str, Any], frame_path: str) -> dict | None:
@@ -149,11 +164,11 @@ def extract_video_frames(context: SkillContext, file_info: dict[str, Any]) -> li
         raise RuntimeError("FFmpeg 不可用，无法抽取视频关键帧")
 
     source = original_file_path(context, file_info)
-    frames_dir = ensure_derived_dir(context, "frames")
-    frames_root = derived_path(context, "derived/frames")
+    frames_dir = _run_derived_dir(context, "frames")
+    frames_root = _run_derived_root(context, "frames")
     frame_pattern = (frames_dir / f"{file_info['id']}_frame_%06d.png").resolve()
     if not frame_pattern.parent.is_relative_to(frames_root):
-        raise ValueError("frame path escaped derived/frames")
+        raise ValueError("frame path escaped derived frames")
 
     for stale_frame in frames_dir.glob(f"{file_info['id']}_frame_*.png"):
         stale_frame.unlink(missing_ok=True)
@@ -177,7 +192,7 @@ def extract_video_frames(context: SkillContext, file_info: dict[str, Any]) -> li
     for index, frame in enumerate(sorted(frames_dir.glob(f"{file_info['id']}_frame_*.png"))):
         absolute_frame = frame.resolve()
         if not absolute_frame.is_relative_to(frames_root):
-            raise ValueError("frame path escaped derived/frames")
+            raise ValueError("frame path escaped derived frames")
         relative_path = absolute_frame.relative_to(task_root).as_posix()
         frames.append({"timestamp_ms": index * interval * 1000, "frame_path": relative_path})
     return frames
@@ -188,7 +203,7 @@ def real_video_outputs(context: SkillContext, file_info: dict[str, Any]) -> tupl
         raise RuntimeError("FFmpeg 不可用，无法解析视频")
 
     source = original_file_path(context, file_info)
-    audio_dir = ensure_derived_dir(context, "audio")
+    audio_dir = _run_derived_dir(context, "audio")
     audio_path = audio_dir / f"{file_info['id']}.wav"
     evidence: list[dict] = []
     warnings: list[str] = []

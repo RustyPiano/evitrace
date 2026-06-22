@@ -9,12 +9,14 @@ from app.constants import (
     FILE_STATUS_PARSED,
     FILE_STATUS_PARSING,
     FILE_STATUS_WARNING,
+    RUN_STATUS_FAILED,
     RUN_STATUS_RUNNING,
+    RUN_STATUS_SUCCEEDED,
     TASK_STATUS_FAILED,
     TASK_STATUS_READY,
 )
 from app.database import SessionLocal
-from app.models import Task, TaskFile, TaskRun
+from app.models import Task, TaskFile, TaskRun, utc_now
 from app.schemas import AppError
 from app.services import result_service
 from app.services.storage_service import PARSER_SKILL_BY_MODALITY, task_directory
@@ -97,14 +99,14 @@ def _failure_is_fatal(skill_id: str, modality: str) -> bool:
 
 def _validate_frame_paths(task_id: str, items: list[dict[str, Any]]) -> None:
     root = task_directory(task_id)
-    frames_root = (root / "derived" / "frames").resolve()
+    derived_root = (root / "derived").resolve()
     for item in items:
         locator = item["locator"]
         if locator.get("kind") != "video_frame":
             continue
         frame_path = str(locator.get("frame_path") or "")
         absolute = (root / frame_path).resolve()
-        if not absolute.is_relative_to(frames_root):
+        if not absolute.is_relative_to(derived_root):
             raise AppError("FORBIDDEN", "关键帧路径非法", status.HTTP_403_FORBIDDEN)
 
 
@@ -149,9 +151,14 @@ def _safe_join_details(values: list[str], fallback: str) -> str:
     return "; ".join(safe_values) or fallback
 
 
-def _cleanup_file_derived_artifacts(task_id: str, file_id: str) -> None:
+def _cleanup_file_derived_artifacts(task_id: str, file_id: str, run_id: str | None) -> None:
     root = task_directory(task_id)
-    for relative_dir in ("derived/frames", "derived/audio"):
+    relative_dirs = (
+        (f"derived/runs/{run_id}/frames", f"derived/runs/{run_id}/audio")
+        if run_id is not None
+        else ("derived/frames", "derived/audio")
+    )
+    for relative_dir in relative_dirs:
         directory = root / relative_dir
         if not directory.is_dir():
             continue
@@ -207,8 +214,8 @@ def parse_all_files(
         )
         for index, file in enumerate(files, start=1):
             skill_ids = _parser_skill_ids(file.modality)
-            result_service.delete_file_evidence(db, file.id)
-            _cleanup_file_derived_artifacts(task.id, file.id)
+            result_service.delete_file_evidence(db, file.id, run_id=run_id)
+            _cleanup_file_derived_artifacts(task.id, file.id, run_id)
             if not skill_ids:
                 file.status = FILE_STATUS_WARNING
                 file.error_message = f"unsupported modality: {file.modality}"
@@ -278,7 +285,7 @@ def parse_all_files(
                 summary.errors.append(f"{file.original_name}: {message}")
             else:
                 _validate_frame_paths(task.id, collected_items)
-                created = result_service.create_evidence_batch(db, task.id, collected_items)
+                created = result_service.create_evidence_batch(db, task.id, collected_items, run_id=run_id)
                 summary.evidence_count += len(created)
 
                 if file_warnings:
@@ -299,16 +306,23 @@ def parse_all_files(
     return summary
 
 
-def parse_task_files_for_endpoint(task_id: str) -> ParseSummary | None:
+def parse_task_files_for_endpoint(task_id: str, run_id: str) -> ParseSummary | None:
     try:
-        summary = parse_all_files(task_id)
+        summary = parse_all_files(task_id, run_id=run_id)
     except Exception as exc:
+        error_message = _safe_parse_detail(exc)
         with SessionLocal() as db:
             task = db.get(Task, task_id)
             if task is not None:
                 task.status = TASK_STATUS_FAILED
-                task.last_error = _safe_parse_detail(exc)
-                db.commit()
+                task.last_error = error_message
+            run = db.get(TaskRun, run_id)
+            if run is not None:
+                run.status = RUN_STATUS_FAILED
+                run.current_step = "failed"
+                run.error_message = error_message
+                run.finished_at = utc_now()
+            db.commit()
         raise
 
     with SessionLocal() as db:
@@ -316,5 +330,12 @@ def parse_task_files_for_endpoint(task_id: str) -> ParseSummary | None:
         if task is not None:
             task.status = TASK_STATUS_READY
             task.last_error = _summary_message(summary)
-            db.commit()
+        run = db.get(TaskRun, run_id)
+        if run is not None:
+            run.status = RUN_STATUS_SUCCEEDED
+            run.current_step = "parsed"
+            run.progress = 100
+            run.error_message = None
+            run.finished_at = utc_now()
+        db.commit()
     return summary

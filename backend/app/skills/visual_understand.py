@@ -211,7 +211,7 @@ def _default_frame_caption(file_info: dict[str, Any], timestamp_ms: int) -> str:
 
 def _safe_frame_path(context: SkillContext, frame_path: str) -> Path:
     absolute = derived_path(context, frame_path)
-    frames_root = derived_path(context, "derived/frames")
-    if not absolute.is_relative_to(frames_root):
-        raise ValueError("frame path escaped derived/frames")
+    derived_root = derived_path(context, "derived")
+    if not absolute.is_relative_to(derived_root):
+        raise ValueError("frame path escaped derived")
     return absolute

@@ -112,8 +112,11 @@ def _json_load(value: str, default: Any) -> Any:
 
 
 def _validate_completion_gate(db: Session, task: Task, current_user: User, force: bool) -> None:
-    result = db.query(AnalysisResult).filter(AnalysisResult.task_id == task.id).first()
-    if result is None:
+    from app.services.result_service import resolve_result
+
+    try:
+        result = resolve_result(db, task.id)
+    except AppError:
         raise AppError("CITATION_CHECK_REQUIRED", "缺少引用校验结果，无法完成任务", status.HTTP_409_CONFLICT)
     citation_check = _json_load(result.citation_check_json, {})
     if not isinstance(citation_check, dict):

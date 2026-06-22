@@ -4,8 +4,8 @@ import pytest
 
 from app.config import settings
 from app.database import SessionLocal
-from app.models import Evidence, SkillConfig, Task, TaskFile, TaskRun
-from app.services import parse_service
+from app.models import AnalysisResult, Evidence, SkillConfig, Task, TaskFile, TaskRun
+from app.services import parse_service, result_service
 from app.skills import video_parse as video_parse_module
 from app.skills.registry import get_skill as registry_get_skill
 from app.skills.base import SkillResult
@@ -105,6 +105,47 @@ def test_parse_all_files_generates_multimodal_evidence_and_video_frame(client, c
 
     frame_dir = settings.data_root_path / "tasks" / task_id / "derived" / "frames"
     assert any(path.suffix == ".png" for path in frame_dir.iterdir())
+
+
+def test_rerun_keeps_historical_video_frame_accessible(client, create_user):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    [uploaded] = client.post(
+        f"/api/v1/tasks/{task_id}/files",
+        headers=headers,
+        files=[("files", ("clip.mp4", b"\x00\x00\x00\x18ftypmp42", "video/mp4"))],
+    ).json()["data"]
+
+    with SessionLocal() as db:
+        first_run = TaskRun(task_id=task_id, status="running")
+        second_run = TaskRun(task_id=task_id, status="running")
+        db.add_all([first_run, second_run])
+        db.commit()
+        first_run_id = first_run.id
+        second_run_id = second_run.id
+
+    first_summary = parse_service.parse_all_files(task_id, run_id=first_run_id)
+    assert first_summary.evidence_count > 0
+    with SessionLocal() as db:
+        first_evidence = (
+            db.query(Evidence)
+            .filter(Evidence.task_id == task_id, Evidence.run_id == first_run_id, Evidence.evidence_type == "video_frame_ocr")
+            .one()
+        )
+        first_evidence_id = first_evidence.id
+        first_locator = result_service.deserialize_locator(first_evidence.locator_json)
+        first_frame_path = first_locator["frame_path"]
+    assert first_frame_path.startswith(f"derived/runs/{first_run_id}/frames/")
+    assert (settings.data_root_path / "tasks" / task_id / first_frame_path).is_file()
+
+    second_summary = parse_service.parse_all_files(task_id, run_id=second_run_id)
+    assert second_summary.evidence_count > 0
+
+    frame_response = client.get(f"/api/v1/evidence/{first_evidence_id}/frame", headers=headers)
+    assert frame_response.status_code == 200
+    assert frame_response.content
+    assert (settings.data_root_path / "tasks" / task_id / first_frame_path).is_file()
 
 
 def test_evidence_index_returns_all_display_ids_beyond_page_limit(client, create_user):
@@ -382,24 +423,142 @@ def test_parse_endpoint_top_level_error_redacts_task_last_error(client, create_u
     )
     sensitive_path = settings.data_root_path / "models" / "ocr"
 
-    def fail_parse(_task_id: str):
+    def fail_parse(_task_id: str, **_kwargs):
         raise RuntimeError(f"task_id={task_id} cannot open {sensitive_path}")
 
     monkeypatch.setattr(parse_service, "parse_all_files", fail_parse)
 
+    with SessionLocal() as db:
+        run = TaskRun(task_id=task_id, status="running")
+        db.add(run)
+        db.commit()
+        run_id = run.id
+
     with pytest.raises(RuntimeError):
-        parse_service.parse_task_files_for_endpoint(task_id)
+        parse_service.parse_task_files_for_endpoint(task_id, run_id)
 
     with SessionLocal() as db:
         task = db.get(Task, task_id)
+        run = db.get(TaskRun, run_id)
         assert task.status == "failed"
         assert str(settings.data_root_path) not in task.last_error
         assert "[data-root]" in task.last_error
         assert task_id in task.last_error
+        assert run.status == "failed"
+        assert run.current_step == "failed"
+        assert run.finished_at is not None
 
     detail = client.get(f"/api/v1/tasks/{task_id}", headers=headers).json()["data"]
     assert str(settings.data_root_path) not in detail["last_error"]
     assert "[data-root]" in detail["last_error"]
+
+
+def test_parse_endpoint_preserves_historical_run_evidence_and_creates_parse_run(client, create_user):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    [uploaded] = client.post(
+        f"/api/v1/tasks/{task_id}/files",
+        headers=headers,
+        files=[("files", ("note.txt", b"historical text", "text/plain"))],
+    ).json()["data"]
+    with SessionLocal() as db:
+        run = TaskRun(task_id=task_id, status="succeeded")
+        db.add(run)
+        db.flush()
+        [historical_evidence] = result_service.create_evidence_batch(
+            db,
+            task_id,
+            [
+                {
+                    "file_id": uploaded["id"],
+                    "content": "Historical evidence",
+                    "modality": "text",
+                    "evidence_type": "paragraph",
+                    "locator": {"kind": "text", "paragraph": 1},
+                    "confidence": None,
+                    "skill_id": "document_parse",
+                }
+            ],
+            run_id=run.id,
+        )
+        db.add(
+            AnalysisResult(
+                task_id=task_id,
+                run_id=run.id,
+                entities_json="[]",
+                events_json="[]",
+                timeline_json="[]",
+                conflicts_json="[]",
+                report_markdown=f"Uses {historical_evidence.display_id}",
+                citation_check_json='{"evidence_ids":["E-0001"]}',
+            )
+        )
+        db.commit()
+        historical_run_id = run.id
+        historical_evidence_id = historical_evidence.id
+
+    response = client.post(f"/api/v1/tasks/{task_id}/parse", headers=headers)
+
+    assert response.status_code == 202
+    with SessionLocal() as db:
+        assert db.get(Evidence, historical_evidence_id) is not None
+        assert db.query(AnalysisResult).filter(AnalysisResult.run_id == historical_run_id).count() == 1
+        parse_run = (
+            db.query(TaskRun)
+            .filter(TaskRun.task_id == task_id, TaskRun.id != historical_run_id)
+            .one()
+        )
+        assert parse_run.status == "succeeded"
+        assert parse_run.current_step == "parsed"
+        assert parse_run.progress == 100
+        parse_run_id = parse_run.id
+        assert db.query(Evidence).filter(Evidence.file_id == uploaded["id"], Evidence.run_id == parse_run_id).count() == 1
+
+    evidence_response = client.get(
+        f"/api/v1/tasks/{task_id}/evidence?run_id={historical_run_id}",
+        headers=headers,
+    )
+    result_response = client.get(
+        f"/api/v1/tasks/{task_id}/results?run_id={historical_run_id}",
+        headers=headers,
+    )
+    runs_response = client.get(f"/api/v1/tasks/{task_id}/runs", headers=headers)
+
+    assert evidence_response.status_code == 200
+    assert evidence_response.json()["data"]["total"] == 1
+    assert result_response.status_code == 200
+    assert result_response.json()["data"]["run_id"] == historical_run_id
+    listed_runs = runs_response.json()["data"]
+    parse_run_summary = next(item for item in listed_runs if item["run_id"] == parse_run_id)
+    assert parse_run_summary["has_result"] is False
+
+
+def test_parse_endpoint_video_artifacts_are_scoped_to_created_run(client, create_user):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    client.post(
+        f"/api/v1/tasks/{task_id}/files",
+        headers=headers,
+        files=[("files", ("clip.mp4", b"\x00\x00\x00\x18ftypmp42", "video/mp4"))],
+    )
+
+    response = client.post(f"/api/v1/tasks/{task_id}/parse", headers=headers)
+
+    assert response.status_code == 202
+    run_id = response.json()["data"]["run_id"]
+    with SessionLocal() as db:
+        frame_evidence = (
+            db.query(Evidence)
+            .filter(Evidence.task_id == task_id, Evidence.run_id == run_id, Evidence.evidence_type == "video_frame_ocr")
+            .one()
+        )
+        frame_path = result_service.deserialize_locator(frame_evidence.locator_json)["frame_path"]
+
+    assert frame_path.startswith(f"derived/runs/{run_id}/frames/")
+    assert "None" not in frame_path
+    assert (settings.data_root_path / "tasks" / task_id / frame_path).is_file()
 
 
 def test_parse_all_files_does_not_finalize_task_or_run_when_file_fails(client, create_user):

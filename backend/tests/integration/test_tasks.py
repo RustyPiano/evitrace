@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 
 from app.config import settings
 from app.database import SessionLocal
@@ -187,6 +188,54 @@ def test_completing_task_rejects_low_citation_coverage_for_analyst(client, creat
 
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "CITATION_COVERAGE_TOO_LOW"
+
+
+def test_completing_task_uses_latest_run_citation_check(client, create_user):
+    create_user("alice")
+    headers = login_headers(client, "alice", "password")
+    task_id = _create_task(client, headers)
+    same_created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        task.status = "awaiting_review"
+        old_run = TaskRun(task_id=task_id, status="succeeded", started_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+        new_run = TaskRun(task_id=task_id, status="succeeded", started_at=datetime(2026, 1, 2, tzinfo=timezone.utc))
+        db.add_all([old_run, new_run])
+        db.flush()
+        db.add_all(
+            [
+                AnalysisResult(
+                    task_id=task_id,
+                    run_id=old_run.id,
+                    entities_json="[]",
+                    events_json="[]",
+                    timeline_json="[]",
+                    conflicts_json="[]",
+                    citation_check_json=json.dumps({"invalid_citations": [], "citation_coverage": 1.0}),
+                    created_at=same_created_at,
+                ),
+                AnalysisResult(
+                    task_id=task_id,
+                    run_id=new_run.id,
+                    entities_json="[]",
+                    events_json="[]",
+                    timeline_json="[]",
+                    conflicts_json="[]",
+                    citation_check_json=json.dumps({"invalid_citations": ["E-9999"], "citation_coverage": 1.0}),
+                    created_at=same_created_at,
+                ),
+            ]
+        )
+        db.commit()
+
+    response = client.patch(
+        f"/api/v1/tasks/{task_id}",
+        headers=headers,
+        json={"status": "completed"},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "INVALID_CITATIONS_PRESENT"
 
 
 def test_completing_task_allows_admin_force_for_low_citation_coverage(client, create_user):
