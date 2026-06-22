@@ -61,6 +61,15 @@ def create_app() -> FastAPI:
             "message": "ok",
         }
 
+    @api_router.get("/config", status_code=status.HTTP_200_OK)
+    async def public_config() -> dict[str, Any]:
+        return {
+            "data": {
+                "max_upload_mb": settings.max_upload_mb,
+            },
+            "message": "ok",
+        }
+
     api_router.include_router(auth.router)
     api_router.include_router(tasks.router)
     api_router.include_router(files.router)
@@ -78,9 +87,16 @@ def create_app() -> FastAPI:
     async def handle_validation_error(
         _: Request, exc: RequestValidationError
     ) -> JSONResponse:
+        logger.warning(
+            "Request validation error: %s",
+            [
+                {"loc": error.get("loc"), "type": error.get("type")}
+                for error in exc.errors()
+            ],
+        )
         return _error_response(
             "VALIDATION_ERROR",
-            str(exc),
+            "请求参数校验失败",
             status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
 

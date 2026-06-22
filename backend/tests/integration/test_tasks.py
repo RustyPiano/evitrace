@@ -104,6 +104,8 @@ def test_create_task_validates_fields(client, create_user):
 
     assert response.status_code == 422
     assert response.json()["detail"]["code"] == "VALIDATION_ERROR"
+    assert response.json()["detail"]["message"] == "请求参数校验失败"
+    assert "input_value" not in response.json()["detail"]["message"]
 
 
 def test_create_task_uses_current_user_and_draft_status(client, create_user):
@@ -155,6 +157,17 @@ def test_completing_task_from_awaiting_review_succeeds(client, create_user):
 
     assert response.status_code == 200
     assert response.json()["data"]["status"] == "completed"
+    with SessionLocal() as db:
+        audit = (
+            db.query(AuditLog)
+            .filter(
+                AuditLog.resource_type == "task",
+                AuditLog.resource_id == task_id,
+                AuditLog.action == "task_completed",
+            )
+            .one()
+        )
+    assert json.loads(audit.detail_json) == {"force": False}
 
 
 def test_completing_task_rejects_low_citation_coverage_for_analyst(client, create_user):

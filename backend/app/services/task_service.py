@@ -193,6 +193,14 @@ def update_task(
             )
         _validate_completion_gate(db, task, current_user, payload.force)
         task.status = TASK_STATUS_COMPLETED
+        record_audit(
+            db,
+            user_id=current_user.id,
+            action="task_completed",
+            resource_type="task",
+            resource_id=task.id,
+            detail={"force": payload.force},
+        )
 
     db.commit()
     db.refresh(task)

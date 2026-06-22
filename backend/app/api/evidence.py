@@ -32,6 +32,15 @@ def list_evidence(
     }
 
 
+@router.get("/tasks/{task_id}/evidence/index")
+def list_evidence_index(
+    task_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    return {"data": result_service.list_task_evidence_index(db, task_id, current_user), "message": "ok"}
+
+
 @router.get("/evidence/{evidence_id}")
 def get_evidence(
     evidence_id: str,

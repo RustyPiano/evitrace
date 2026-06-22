@@ -11,6 +11,7 @@ from app.config import settings
 from app.constants import SKILL_STATUS_ERROR, SKILL_STATUS_HEALTHY, SKILL_STATUS_UNKNOWN
 from app.models import SkillConfig
 from app.schemas import AppError
+from app.utils.health_details import public_health_detail
 
 from .base import SkillManifest
 from .audio_transcribe import AudioTranscribeSkill, resolve_asr_model_path
@@ -96,7 +97,7 @@ def serialize_skill_config(config: SkillConfig) -> dict[str, Any]:
         "enabled": config.enabled,
         "required": config.required,
         "last_status": config.last_status,
-        "last_error": config.last_error,
+        "last_error": public_health_detail(config.last_error) if config.last_error else None,
         "updated_at": config.updated_at.isoformat() if config.updated_at else None,
     }
 
@@ -167,7 +168,7 @@ def check_skill_health(db: Session, skill_id: str) -> dict[str, Any]:
         config.last_error = None
     except Exception as exc:
         config.last_status = SKILL_STATUS_ERROR
-        config.last_error = str(exc)
+        config.last_error = public_health_detail(exc)
 
     db.commit()
     db.refresh(config)

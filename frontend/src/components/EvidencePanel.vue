@@ -25,6 +25,14 @@
       </div>
       <div v-else-if="frameUrl" class="source-preview">
         <img :src="frameUrl" alt="video frame" />
+        <video
+          v-if="mediaUrl && mediaKind === 'video'"
+          ref="mediaRef"
+          class="source-player"
+          :src="mediaUrl"
+          controls
+          @loadedmetadata="seekToLocator"
+        />
       </div>
       <audio
         v-else-if="mediaUrl && mediaKind === 'audio'"
@@ -103,7 +111,10 @@ const mediaKind = computed(() => {
   if (evidence.value.modality === "audio") {
     return "audio";
   }
-  if (evidence.value.modality === "video" && source.value?.locator.kind === "video_audio") {
+  if (
+    evidence.value.modality === "video" &&
+    (source.value?.locator.kind === "video_audio" || source.value?.locator.kind === "video_frame")
+  ) {
     return "video";
   }
   return null;
@@ -175,7 +186,7 @@ async function loadPreviewAssets() {
   if (!source.value || !evidence.value) {
     return;
   }
-  if (evidence.value.modality === "image" || source.value.locator.kind === "video_audio") {
+  if (evidence.value.modality === "image" || evidence.value.modality === "video") {
     mediaUrl.value = await fetchProtectedBlob(source.value.file_url);
   }
   if (evidence.value.modality === "audio") {

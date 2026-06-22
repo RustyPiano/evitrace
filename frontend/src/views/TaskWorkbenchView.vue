@@ -134,7 +134,7 @@ import ReportPanel from "@/components/ReportPanel.vue";
 import RunProgress from "@/components/RunProgress.vue";
 import TimelinePanel from "@/components/TimelinePanel.vue";
 import { useAuthStore } from "@/stores/auth";
-import type { AnalysisResult, EvidenceItem, RunStatus, TaskDetail, TimelineItem } from "@/types/workbench";
+import type { AnalysisResult, RunStatus, TaskDetail, TimelineItem } from "@/types/workbench";
 import { extractErrorMessage } from "@/utils/errors";
 import {
   formatPercent,
@@ -146,13 +146,20 @@ import {
 const route = useRoute();
 const authStore = useAuthStore();
 const taskId = String(route.params.id);
+interface EvidenceIndexItem {
+  id: string;
+  display_id: string;
+  modality: string;
+  evidence_type: string;
+}
+
 const task = ref<TaskDetail | null>(null);
 const loading = ref(false);
 const errorMessage = ref("");
 const activeTab = ref("overview");
 const latestRun = ref<RunStatus | null>(null);
 const analysisResult = ref<AnalysisResult | null>(null);
-const evidenceItems = ref<EvidenceItem[]>([]);
+const evidenceItems = ref<EvidenceIndexItem[]>([]);
 const evidenceTotal = ref(0);
 const selectedEvidenceId = ref<string | null>(null);
 const analysisStarting = ref(false);
@@ -160,6 +167,7 @@ const completing = ref(false);
 const forceComplete = ref(false);
 const downloading = ref(false);
 let pollTimer: number | null = null;
+let polling = false;
 
 const isRunning = computed(() => Boolean(task.value && isRunningStatus(task.value.status)));
 const citationCoverage = computed(() => analysisResult.value?.citation_check?.citation_coverage ?? 0);
@@ -247,7 +255,7 @@ onMounted(async () => {
 });
 onBeforeUnmount(stopPolling);
 
-async function refreshAll(showLoading = false) {
+async function refreshAll(showLoading = false, rethrow = false) {
   if (showLoading) {
     loading.value = true;
   }
@@ -256,6 +264,9 @@ async function refreshAll(showLoading = false) {
     await Promise.all([loadTask(), loadLatestRun(), loadEvidence(), loadResults()]);
   } catch (error) {
     errorMessage.value = extractErrorMessage(error, "加载任务工作台失败");
+    if (rethrow) {
+      throw error;
+    }
   } finally {
     loading.value = false;
   }
@@ -267,13 +278,9 @@ async function loadTask() {
 }
 
 async function loadEvidence() {
-  const response = await apiClient.get<{
-    data: { items: EvidenceItem[]; total: number; page: number; page_size: number };
-  }>(`/tasks/${taskId}/evidence`, {
-    params: { page: 1, page_size: 500 }
-  });
-  evidenceItems.value = response.data.data.items;
-  evidenceTotal.value = response.data.data.total;
+  const response = await apiClient.get<{ data: EvidenceIndexItem[] }>(`/tasks/${taskId}/evidence/index`);
+  evidenceItems.value = response.data.data;
+  evidenceTotal.value = response.data.data.length;
 }
 
 async function loadLatestRun() {
@@ -377,18 +384,42 @@ async function downloadReport() {
 
 function startPolling() {
   stopPolling();
-  pollTimer = window.setInterval(async () => {
-    await refreshAll();
+  polling = true;
+  scheduleNextPoll();
+}
+
+function scheduleNextPoll() {
+  if (!polling) {
+    return;
+  }
+  pollTimer = window.setTimeout(runPoll, 2000);
+}
+
+async function runPoll() {
+  pollTimer = null;
+  if (!polling) {
+    return;
+  }
+  try {
+    await refreshAll(false, true);
     if (!isRunning.value) {
       stopPolling();
-      await refreshAll();
+      return;
     }
-  }, 2000);
+    scheduleNextPoll();
+  } catch (error) {
+    if (isUnauthorized(error)) {
+      stopPolling();
+      return;
+    }
+    scheduleNextPoll();
+  }
 }
 
 function stopPolling() {
+  polling = false;
   if (pollTimer !== null) {
-    window.clearInterval(pollTimer);
+    window.clearTimeout(pollTimer);
     pollTimer = null;
   }
 }
@@ -408,6 +439,15 @@ function isNotFound(error: unknown): boolean {
       error !== null &&
       "response" in error &&
       (error as { response?: { status?: number } }).response?.status === 404
+  );
+}
+
+function isUnauthorized(error: unknown): boolean {
+  return Boolean(
+    typeof error === "object" &&
+      error !== null &&
+      "response" in error &&
+      (error as { response?: { status?: number } }).response?.status === 401
   );
 }
 

@@ -99,6 +99,49 @@ def test_parse_all_files_generates_multimodal_evidence_and_video_frame(client, c
     assert any(path.suffix == ".png" for path in frame_dir.iterdir())
 
 
+def test_evidence_index_returns_all_display_ids_beyond_page_limit(client, create_user):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    [uploaded] = client.post(
+        f"/api/v1/tasks/{task_id}/files",
+        headers=headers,
+        files=[("files", ("note.txt", b"ready", "text/plain"))],
+    ).json()["data"]
+    with SessionLocal() as db:
+        for index in range(55):
+            db.add(
+                Evidence(
+                    display_id=f"E-{index + 1:04d}",
+                    task_id=task_id,
+                    file_id=uploaded["id"],
+                    modality="text",
+                    evidence_type="paragraph",
+                    content=f"evidence {index + 1}",
+                    locator_json="{}",
+                    skill_id="document_parse",
+                )
+            )
+        db.commit()
+
+    paged = client.get(
+        f"/api/v1/tasks/{task_id}/evidence?page=1&page_size=500",
+        headers=headers,
+    )
+    indexed = client.get(f"/api/v1/tasks/{task_id}/evidence/index", headers=headers)
+
+    assert paged.status_code == 200
+    assert len(paged.json()["data"]["items"]) == 50
+    assert indexed.status_code == 200
+    items = indexed.json()["data"]
+    assert len(items) == 55
+    item_51 = items[50]
+    assert item_51["display_id"] == "E-0051"
+    assert item_51["id"]
+    assert item_51["modality"] == "text"
+    assert item_51["evidence_type"] == "paragraph"
+
+
 def test_disabled_parser_marks_matching_files_warning_and_skips_evidence(client, create_user):
     create_user("owner")
     headers = login_headers(client, "owner", "password")

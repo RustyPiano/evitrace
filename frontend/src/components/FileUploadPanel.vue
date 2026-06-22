@@ -3,7 +3,7 @@
     <div class="upload-toolbar">
       <div>
         <h2>上传资料</h2>
-        <p>txt, md, pdf, docx, jpg, jpeg, png, wav, mp3, m4a, mp4 · 最大 {{ maxUploadMb }} MB</p>
+        <p>txt, md, pdf, docx, jpg, jpeg, png, wav, mp3, m4a, mp4 · {{ uploadLimitText }}</p>
       </div>
       <div class="upload-actions">
         <input
@@ -39,7 +39,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 
 import { apiClient } from "@/api/client";
 
@@ -62,12 +62,26 @@ interface UploadItem {
   message: string;
 }
 
-const maxUploadMb = 200;
+const maxUploadMb = ref<number | null>(null);
 const acceptedExtensions = ".txt,.md,.pdf,.docx,.jpg,.jpeg,.png,.wav,.mp3,.m4a,.mp4";
 const fileInput = ref<HTMLInputElement | null>(null);
 const items = ref<UploadItem[]>([]);
 const uploading = ref(false);
 const pendingFiles = computed(() => items.value.filter((item) => item.status === "pending"));
+const uploadLimitText = computed(() =>
+  maxUploadMb.value === null ? "最大上传大小以后端配置为准" : `最大 ${maxUploadMb.value} MB`
+);
+
+onMounted(loadPublicConfig);
+
+async function loadPublicConfig() {
+  try {
+    const response = await apiClient.get<{ data: { max_upload_mb: number } }>("/config");
+    maxUploadMb.value = response.data.data.max_upload_mb;
+  } catch {
+    maxUploadMb.value = null;
+  }
+}
 
 function handleFileChange(event: Event) {
   const input = event.target as HTMLInputElement;

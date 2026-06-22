@@ -8,6 +8,17 @@ from app.models import Evidence, Task, TaskFile
 from tests.conftest import login_headers
 
 
+def test_public_config_exposes_upload_limit_without_sensitive_settings(client):
+    response = client.get("/api/v1/config")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data == {"max_upload_mb": settings.max_upload_mb}
+    assert "secret" not in response.text.lower()
+    assert "api_key" not in response.text.lower()
+    assert "database" not in response.text.lower()
+
+
 def _create_task(client, headers) -> str:
     response = client.post(
         "/api/v1/tasks",

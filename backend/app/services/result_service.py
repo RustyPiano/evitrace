@@ -135,6 +135,34 @@ def list_task_evidence(
     }
 
 
+def list_task_evidence_index(
+    db: Session,
+    task_id: str,
+    current_user: User,
+) -> list[dict[str, Any]]:
+    task = ensure_task_access(db, task_id, current_user)
+    items = (
+        db.query(
+            Evidence.id,
+            Evidence.display_id,
+            Evidence.modality,
+            Evidence.evidence_type,
+        )
+        .filter(Evidence.task_id == task.id)
+        .order_by(Evidence.display_id.asc())
+        .all()
+    )
+    return [
+        {
+            "id": item.id,
+            "display_id": item.display_id,
+            "modality": item.modality,
+            "evidence_type": item.evidence_type,
+        }
+        for item in items
+    ]
+
+
 def get_evidence_with_access(db: Session, evidence_id: str, current_user: User) -> Evidence:
     evidence = db.get(Evidence, evidence_id)
     if evidence is None:
@@ -185,4 +213,3 @@ def frame_file_response(db: Session, evidence_id: str, current_user: User) -> Fi
     path, frame_path = _safe_frame_path(evidence)
     media_type = "image/jpeg" if frame_path.lower().endswith((".jpg", ".jpeg")) else "image/png"
     return FileResponse(path, media_type=media_type, filename=frame_path.rsplit("/", 1)[-1])
-

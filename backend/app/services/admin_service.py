@@ -18,6 +18,7 @@ from app.services.auth_service import hash_password
 from app.services.llm_client import ping_local_llm
 from app.skills.registry import check_skill_health as run_skill_health
 from app.skills.registry import serialize_skill_config, set_skill_enabled
+from app.utils.health_details import redact_health_detail
 
 
 def _isoformat(value: datetime | None) -> str | None:
@@ -222,7 +223,7 @@ def _llm_health() -> dict[str, str]:
     health = ping_local_llm()
     if health.get("status") == "healthy":
         return _health_item("llm", "healthy", "local model probe ok")
-    return _health_item("llm", "unavailable", _short_detail(health.get("message") or health.get("code")))
+    return _health_item("llm", "unavailable", health.get("message") or health.get("code"))
 
 
 def _ffmpeg_health() -> dict[str, str]:
@@ -261,14 +262,8 @@ def _health_item(component: str, status_value: str, detail: str) -> dict[str, st
     return {
         "component": component,
         "status": status_value,
-        "detail": _short_detail(detail),
+        "detail": redact_health_detail(detail),
     }
-
-
-def _short_detail(value: object) -> str:
-    text = str(value or "unavailable").replace(str(settings.data_root_path), "[data-root]")
-    text = text.replace(settings.secret_key, "[redacted]")
-    return text[:160]
 
 
 def _serialize_audit_log(row: AuditLog, username: str | None) -> dict[str, Any]:

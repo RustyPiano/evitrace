@@ -1,7 +1,7 @@
 <template>
   <section class="panel-surface">
-    <div class="report-toolbar">
-      <div class="citation-summary">
+    <div v-if="reportMarkdown || hasCitationCheck" class="report-toolbar">
+      <div v-if="hasCitationCheck" class="citation-summary">
         <el-tag
           :type="invalidCitations.length ? 'danger' : 'success'"
           effect="plain"
@@ -13,17 +13,22 @@
         </el-tag>
       </div>
       <div class="report-actions">
-        <el-button :loading="regenerating" :disabled="running" @click="regenerateReport">
+        <el-button
+          v-if="hasCitationCheck"
+          :loading="regenerating"
+          :disabled="running"
+          @click="regenerateReport"
+        >
           重新生成报告
         </el-button>
-        <el-button type="primary" :disabled="!reportMarkdown" :loading="downloading" @click="downloadReport">
+        <el-button v-if="reportMarkdown" type="primary" :loading="downloading" @click="downloadReport">
           下载 Markdown
         </el-button>
       </div>
     </div>
 
     <el-alert
-      v-if="coverage < 0.9"
+      v-if="hasCitationCheck && coverage < 0.9"
       type="warning"
       :closable="false"
       show-icon
@@ -72,6 +77,7 @@ const emit = defineEmits<{
 const regenerating = ref(false);
 const downloading = ref(false);
 
+const hasCitationCheck = computed(() => props.analysisComplete && props.citationCheck !== null);
 const invalidCitations = computed(() => props.citationCheck?.invalid_citations ?? []);
 const invalidCitationSet = computed(() => new Set(invalidCitations.value));
 const coverage = computed(() => props.citationCheck?.citation_coverage ?? 0);

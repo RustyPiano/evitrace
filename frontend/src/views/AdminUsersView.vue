@@ -13,26 +13,40 @@
       <el-table-column prop="username" label="用户名" min-width="180" />
       <el-table-column label="角色" width="180">
         <template #default="{ row }: { row: AdminUser }">
-          <el-select
-            :model-value="row.role"
-            size="small"
-            :disabled="isSelf(row) || wouldRemoveLastAdmin(row)"
-            @change="changeRole(row, String($event))"
-          >
-            <el-option label="分析员" value="analyst" />
-            <el-option label="管理员" value="admin" />
-          </el-select>
+          <div class="restricted-control">
+            <el-tooltip :content="userRestrictionReason(row)" :disabled="!userRestrictionReason(row)">
+              <span class="restricted-control-target">
+                <el-select
+                  :model-value="row.role"
+                  size="small"
+                  :disabled="Boolean(userRestrictionReason(row))"
+                  @change="changeRole(row, String($event))"
+                >
+                  <el-option label="分析员" value="analyst" />
+                  <el-option label="管理员" value="admin" />
+                </el-select>
+              </span>
+            </el-tooltip>
+            <small v-if="userRestrictionReason(row)">{{ userRestrictionReason(row) }}</small>
+          </div>
         </template>
       </el-table-column>
       <el-table-column label="状态" width="150">
         <template #default="{ row }: { row: AdminUser }">
-          <el-switch
-            :model-value="row.is_active"
-            :disabled="isSelf(row) || wouldRemoveLastAdmin(row)"
-            active-text="启用"
-            inactive-text="停用"
-            @change="updateUser(row, { is_active: Boolean($event) })"
-          />
+          <div class="restricted-control">
+            <el-tooltip :content="userRestrictionReason(row)" :disabled="!userRestrictionReason(row)">
+              <span class="restricted-control-target">
+                <el-switch
+                  :model-value="row.is_active"
+                  :disabled="Boolean(userRestrictionReason(row))"
+                  active-text="启用"
+                  inactive-text="停用"
+                  @change="updateUser(row, { is_active: Boolean($event) })"
+                />
+              </span>
+            </el-tooltip>
+            <small v-if="userRestrictionReason(row)">{{ userRestrictionReason(row) }}</small>
+          </div>
         </template>
       </el-table-column>
       <el-table-column label="创建时间" width="220">
@@ -178,4 +192,32 @@ function isSelf(user: AdminUser): boolean {
 function wouldRemoveLastAdmin(user: AdminUser): boolean {
   return user.role === "admin" && user.is_active && activeAdminCount.value <= 1;
 }
+
+function userRestrictionReason(user: AdminUser): string {
+  if (isSelf(user)) {
+    return "不能修改当前登录账号";
+  }
+  if (wouldRemoveLastAdmin(user)) {
+    return "至少保留一个启用管理员";
+  }
+  return "";
+}
 </script>
+
+<style scoped>
+.restricted-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.restricted-control-target {
+  display: inline-flex;
+}
+
+.restricted-control small {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.2;
+}
+</style>
