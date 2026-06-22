@@ -20,7 +20,7 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parents[1]
 DEMO_ROOT = ROOT / "demo_data"
 SAMPLE_RATE = 16_000
-MEDIA_SECONDS = 8
+MEDIA_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -268,7 +268,7 @@ def write_wav(path: Path) -> None:
 
 def write_video(path: Path, title: str, frame_text: str) -> str | None:
     if shutil.which("ffmpeg") is None:
-        return "ffmpeg unavailable; skipped video.mp4"
+        return f"ffmpeg unavailable; cannot generate {path}. Install ffmpeg and retry."
 
     with TemporaryDirectory() as tmpdir:
         frame_path = Path(tmpdir) / "frame.png"
@@ -308,15 +308,15 @@ def write_video(path: Path, title: str, frame_text: str) -> str | None:
 def write_case(case: DemoCase) -> list[str]:
     case_dir = DEMO_ROOT / case.directory
     case_dir.mkdir(parents=True, exist_ok=True)
-    warnings: list[str] = []
+    errors: list[str] = []
 
     (case_dir / "brief.txt").write_text(case.brief_text + "\n", encoding="utf-8")
     write_pdf(case_dir / "report.pdf", case.title, case.report_text)
     write_png(case_dir / "image.png", case.title, case.image_text)
     write_wav(case_dir / "audio.wav")
-    video_warning = write_video(case_dir / "video.mp4", case.title, case.video_frame_text)
-    if video_warning:
-        warnings.append(video_warning)
+    video_error = write_video(case_dir / "video.mp4", case.title, case.video_frame_text)
+    if video_error:
+        errors.append(video_error)
 
     write_json(
         case_dir / "image.ocr.json",
@@ -434,25 +434,26 @@ def write_case(case: DemoCase) -> list[str]:
         ),
         encoding="utf-8",
     )
-    return warnings
+    return errors
 
 
 def main() -> int:
     DEMO_ROOT.mkdir(parents=True, exist_ok=True)
-    all_warnings: list[str] = []
+    all_errors: list[str] = []
     generated_files: list[Path] = []
     for case in cases():
-        warnings = write_case(case)
-        all_warnings.extend(warnings)
+        errors = write_case(case)
+        all_errors.extend(errors)
         generated_files.extend(sorted((DEMO_ROOT / case.directory).iterdir()))
 
     print(f"Generated {len(cases())} demo cases in {DEMO_ROOT}")
     for path in generated_files:
         print(f"- {path.relative_to(ROOT)}")
-    if all_warnings:
-        print("Warnings:")
-        for warning in all_warnings:
-            print(f"- {warning}")
+    if all_errors:
+        print("Errors:")
+        for error in all_errors:
+            print(f"- {error}")
+        return 1
     return 0
 
 

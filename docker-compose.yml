@@ -18,6 +18,8 @@ services:
       LOCAL_LLM_MODEL: ${LOCAL_LLM_MODEL:-qwen-local}
       LLM_TIMEOUT_SEC: ${LLM_TIMEOUT_SEC:-180}
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+      # The provided backend image is MOCK-only: keep this true unless you build
+      # a custom image with ffmpeg, requirements-optional.txt, and mounted local models.
       MOCK_AI: ${MOCK_AI:-true}
       OCR_MODEL_DIR: ${OCR_MODEL_DIR:-}
       ASR_MODEL_DIR: ${ASR_MODEL_DIR:-}
@@ -36,6 +38,7 @@ services:
       - /tmp
     restart: unless-stopped
     healthcheck:
+      # Liveness only. Real-mode OCR/ASR/video/LLM readiness needs a custom image/check.
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/v1/health"]
       interval: 10s
       timeout: 5s

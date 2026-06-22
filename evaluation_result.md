@@ -15,7 +15,7 @@
   "cases": [
     {
       "case": "case_01_time_conflict",
-      "task_id": "6e6e2085605f4809ab71380c5b24bec0",
+      "task_id": "9475a462b3bc4de98b2d57cd89f1c65d",
       "task_status": "awaiting_review",
       "run_status": "succeeded",
       "expected_conflict_count": 1,
@@ -44,7 +44,7 @@
     },
     {
       "case": "case_02_location_conflict",
-      "task_id": "a98824addddf4b5e8f1cc9bc1e1ad636",
+      "task_id": "e5c3fd7f409a47f5a1933184d3274301",
       "task_status": "awaiting_review",
       "run_status": "succeeded",
       "expected_conflict_count": 1,
@@ -73,7 +73,7 @@
     },
     {
       "case": "case_03_quantity_conflict",
-      "task_id": "59ea95ff69d84fbc832d27267b922350",
+      "task_id": "b6e2d22341a045128a4a92dc6158cfe8",
       "task_status": "awaiting_review",
       "run_status": "succeeded",
       "expected_conflict_count": 1,

@@ -40,7 +40,7 @@ upload files -> validate type/path -> store originals -> parse to evidence
 - Docker Compose for the zero-config demo deployment.
 - Python 3.11 for local backend development and tests.
 - Node.js 20+ for local frontend development and builds.
-- ffmpeg is required only for real video parsing with `MOCK_AI=false`.
+- ffmpeg is required to (re)generate demo `video.mp4` files and for real video parsing with `MOCK_AI=false`.
 - Optional real OCR/ASR dependencies are in `backend/requirements-optional.txt`; they are not installed in the Docker demo image.
 
 Default `MOCK_AI=true` mode runs without LLM, OCR, ASR, or model weights.
@@ -65,7 +65,7 @@ The application does not download model weights at runtime. Keep `MOCK_AI=true` 
 
 ## Docker Startup
 
-Zero-config demo:
+Zero-config MOCK demo:
 
 ```bash
 docker compose up --build -d
@@ -89,15 +89,18 @@ Without a `.env`, Docker defaults to:
 
 Data persists in `./data`, including SQLite DB, uploads, derived frames, reports, and the auto-generated Docker secret file.
 
-Compose automatically reads a local `.env` if present. That lets you override passwords, model settings, CORS, timeouts, and `MOCK_AI`. For production, set at least:
+The provided backend Docker image is for `MOCK_AI=true` demos. It installs core API dependencies only; it does not install system `ffmpeg`, `backend/requirements-optional.txt`, PaddleOCR, faster-whisper, or model weights. The compose healthcheck is an API liveness check and does not prove real OCR/ASR/video/LLM readiness.
+
+Compose automatically reads a local `.env` if present. That lets you override passwords, model settings, CORS, timeouts, and `MOCK_AI`. For a hardened Docker demo using the provided image, set at least:
 
 ```env
 ENV=production
 SECRET_KEY=<strong random value>
 FIRST_ADMIN_USERNAME=<admin username>
 FIRST_ADMIN_PASSWORD=<strong non-default password>
-MOCK_AI=false
 ```
+
+Keep `MOCK_AI=true` with the provided image. Set `MOCK_AI=false` in Docker only after extending the backend image with system `ffmpeg` and `backend/requirements-optional.txt`, mounting prepared `OCR_MODEL_DIR` and `ASR_MODEL_DIR` paths, and pointing `LOCAL_LLM_*` to an OpenAI-compatible local model service.
 
 If `SECRET_KEY` is empty, `change-me`, or shorter than 32 bytes, the backend Docker entrypoint generates a strong key at `./data/.secret_key` and reuses it on restart. Setting a strong `SECRET_KEY` in `.env` takes precedence.
 
@@ -170,6 +173,8 @@ pip install -r requirements-optional.txt
 MOCK_AI=false uvicorn app.main:app --reload
 ```
 
+Ensure `ffmpeg` is installed on the host and available on `PATH` before running local real video parsing.
+
 ## Admin And Security
 
 Docker demo with no `.env` uses `admin / EviTrace-Demo-Admin-2026!`.
@@ -204,6 +209,8 @@ Generate demo data if the directory is missing or stale:
 ```bash
 python scripts/build_demo_data.py
 ```
+
+This command requires `ffmpeg` because it regenerates the demo `video.mp4` files.
 
 Run the automated three-case evaluation:
 
