@@ -9,6 +9,8 @@ from app.models import Task, TaskFile
 from app.services.task_service import serialize_file
 from app.skills.audio_transcribe import AudioTranscribeSkill
 from app.skills.base import SkillContext
+from app.skills import audio_transcribe as audio_transcribe_module
+from app.skills import image_ocr as image_ocr_module
 from app.skills.image_ocr import ImageOcrSkill
 from app.skills import visual_understand as visual_understand_module
 from app.skills import video_parse as video_parse_module
@@ -158,6 +160,72 @@ def test_mock_image_ocr_empty_fixture_warns_without_fabricating_text():
     assert result.warnings == ["OCR 未识别到文本"]
 
 
+def test_real_image_ocr_uses_http_service_when_base_url_configured(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", False)
+    monkeypatch.setattr(settings, "ocr_base_url", "http://ocr.local", raising=False)
+    monkeypatch.setattr(settings, "ocr_model_dir", None, raising=False)
+    image_path = tmp_path / "image.png"
+    image_path.write_bytes(b"png")
+    calls: list[str] = []
+
+    def fake_ocr_image(base_url, path):
+        calls.append(f"{base_url}|{path.name}")
+        return [
+            {"text": "  第一行  ", "score": 0.91, "box": [1, 2, 30, 40]},
+            {"text": "   ", "score": 0.1, "box": [9, 9, 10, 10]},
+        ]
+
+    monkeypatch.setattr(image_ocr_module.media_client, "ocr_image", fake_ocr_image)
+
+    evidence, warnings = image_ocr_module.real_ocr_evidence(image_path)
+
+    assert calls == ["http://ocr.local|image.png"]
+    assert warnings == []
+    assert evidence == [
+        {
+            "content": "第一行",
+            "modality": "image",
+            "evidence_type": "ocr",
+            "locator": {"kind": "image", "bbox": [1, 2, 30, 40]},
+            "confidence": 0.91,
+        }
+    ]
+
+
+def test_real_image_ocr_http_empty_results_warns(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", False)
+    monkeypatch.setattr(settings, "ocr_base_url", "http://ocr.local", raising=False)
+    image_path = tmp_path / "image.png"
+    image_path.write_bytes(b"png")
+    monkeypatch.setattr(image_ocr_module.media_client, "ocr_image", lambda *_args: [])
+
+    evidence, warnings = image_ocr_module.real_ocr_evidence(image_path)
+
+    assert evidence == []
+    assert warnings == ["OCR 未识别到文本"]
+
+
+def test_real_image_ocr_http_error_returns_skill_failure_without_file_path(monkeypatch):
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", False)
+    monkeypatch.setattr(settings, "ocr_base_url", "http://ocr.local", raising=False)
+    task_id = "http-ocr-failure-task"
+    file = _insert_file(task_id, "private-image.png", "png", "image")
+
+    def fail_ocr(_base_url, _path):
+        raise RuntimeError("OCR 服务返回 HTTP 503")
+
+    monkeypatch.setattr(image_ocr_module.media_client, "ocr_image", fail_ocr)
+
+    result = ImageOcrSkill().run(_context(task_id), {"file": serialize_file(file)})
+
+    assert result.success is False
+    assert result.data["evidence"] == []
+    assert "OCR 服务返回 HTTP 503" in result.errors[0]
+
+
 def test_mock_audio_transcribe_returns_segments_with_time_locators():
     task_id = "audio-task"
     file = _insert_file(task_id, "voice.wav", "wav", "audio")
@@ -183,6 +251,60 @@ def test_mock_audio_transcribe_empty_fixture_warns():
     assert result.success is True
     assert result.data["evidence"] == []
     assert result.warnings == ["ASR 未识别到语音文本"]
+
+
+def test_real_audio_transcribe_uses_http_service_when_base_url_configured(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", False)
+    monkeypatch.setattr(settings, "asr_base_url", "http://asr.local", raising=False)
+    monkeypatch.setattr(settings, "asr_model_dir", None, raising=False)
+    audio_path = tmp_path / "voice.wav"
+    audio_path.write_bytes(b"wav")
+    calls: list[str] = []
+
+    def fake_asr_audio(base_url, path):
+        calls.append(f"{base_url}|{path.name}")
+        return {
+            "duration": 3.0,
+            "segments": [
+                {"start": 0.125, "end": 1.5, "speaker": "说话人1", "text": "  目标出现  "},
+                {"start": 2.0, "end": 2.5, "speaker": None, "text": "   "},
+            ],
+        }
+
+    monkeypatch.setattr(audio_transcribe_module.media_client, "asr_audio", fake_asr_audio)
+
+    evidence, warnings = audio_transcribe_module.real_transcript_evidence(audio_path)
+
+    assert calls == ["http://asr.local|voice.wav"]
+    assert warnings == []
+    assert evidence == [
+        {
+            "content": "[说话人1] 目标出现",
+            "modality": "audio",
+            "evidence_type": "asr",
+            "locator": {"kind": "audio", "start_ms": 125, "end_ms": 1500},
+            "confidence": None,
+        }
+    ]
+
+
+def test_real_audio_transcribe_http_empty_segments_warns(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", False)
+    monkeypatch.setattr(settings, "asr_base_url", "http://asr.local", raising=False)
+    audio_path = tmp_path / "voice.wav"
+    audio_path.write_bytes(b"wav")
+    monkeypatch.setattr(
+        audio_transcribe_module.media_client,
+        "asr_audio",
+        lambda *_args: {"duration": 0.0, "segments": []},
+    )
+
+    evidence, warnings = audio_transcribe_module.real_transcript_evidence(audio_path)
+
+    assert evidence == []
+    assert warnings == ["ASR 未识别到语音文本"]
 
 
 def test_mock_video_parse_generates_audio_and_frame_evidence_with_safe_frame_path():
@@ -466,6 +588,128 @@ def test_real_video_parse_continues_frame_ocr_when_audio_extraction_fails(monkey
     assert warnings == [NO_VIDEO_AUDIO_WARNING]
     assert [item["locator"]["kind"] for item in evidence] == ["video_frame"]
     assert evidence[0]["content"] == "frame text"
+
+
+def test_real_video_parse_wraps_http_ocr_and_asr_outputs(monkeypatch):
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", False)
+    monkeypatch.setattr(settings, "ocr_base_url", "http://ocr.local", raising=False)
+    monkeypatch.setattr(settings, "asr_base_url", "http://asr.local", raising=False)
+    task_id = "real-video-http-media-task"
+    file = _insert_file(task_id, "clip.mp4", "mp4", "video")
+    context = _context(task_id)
+    frame_path = f"derived/frames/{file.id}_frame_000001.png"
+    absolute_frame = settings.data_root_path / "tasks" / task_id / frame_path
+    absolute_frame.parent.mkdir(parents=True, exist_ok=True)
+    absolute_frame.write_bytes(b"png")
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/ffmpeg")
+
+    def fake_run_ffmpeg(command: list[str], *, timeout: int) -> None:
+        if "-vn" in command:
+            with open(command[-1], "wb") as handle:
+                handle.write(b"wav")
+
+    def fake_extract_video_frames(_context, _file_info):
+        return [{"timestamp_ms": 7000, "frame_path": frame_path}]
+
+    monkeypatch.setattr(video_parse_module, "_run_ffmpeg", fake_run_ffmpeg)
+    monkeypatch.setattr(video_parse_module, "extract_video_frames", fake_extract_video_frames)
+    monkeypatch.setattr(
+        audio_transcribe_module.media_client,
+        "asr_audio",
+        lambda _base_url, _path: {
+            "duration": 2.0,
+            "segments": [{"start": 0.5, "end": 1.75, "speaker": "说话人2", "text": "音轨文字"}],
+        },
+    )
+    monkeypatch.setattr(
+        image_ocr_module.media_client,
+        "ocr_image",
+        lambda _base_url, _path: [{"text": "帧文字", "score": 0.82, "box": [4, 5, 60, 70]}],
+    )
+
+    evidence, warnings, frames = video_parse_module.real_video_outputs(context, serialize_file(file))
+
+    assert warnings == []
+    assert frames == [{"timestamp_ms": 7000, "frame_path": frame_path}]
+    assert evidence == [
+        {
+            "content": "[说话人2] 音轨文字",
+            "modality": "video",
+            "evidence_type": "asr",
+            "locator": {"kind": "video_audio", "start_ms": 500, "end_ms": 1750},
+            "confidence": None,
+        },
+        {
+            "content": "帧文字",
+            "modality": "video",
+            "evidence_type": "video_frame_ocr",
+            "locator": {
+                "kind": "video_frame",
+                "timestamp_ms": 7000,
+                "frame_path": frame_path,
+                "bbox": [4, 5, 60, 70],
+            },
+            "confidence": 0.82,
+        },
+    ]
+
+
+def test_real_video_parse_warns_and_keeps_frame_evidence_when_asr_and_one_ocr_frame_fail(monkeypatch):
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", False)
+    task_id = "real-video-http-media-failure-task"
+    file = _insert_file(task_id, "clip.mp4", "mp4", "video")
+    context = _context(task_id)
+    first_frame = f"derived/frames/{file.id}_frame_000001.png"
+    second_frame = f"derived/frames/{file.id}_frame_000002.png"
+    for frame_path in (first_frame, second_frame):
+        absolute_frame = settings.data_root_path / "tasks" / task_id / frame_path
+        absolute_frame.parent.mkdir(parents=True, exist_ok=True)
+        absolute_frame.write_bytes(b"png")
+
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(video_parse_module, "_run_ffmpeg", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        video_parse_module,
+        "extract_video_frames",
+        lambda _context, _file_info: [
+            {"timestamp_ms": 1000, "frame_path": first_frame},
+            {"timestamp_ms": 2000, "frame_path": second_frame},
+        ],
+    )
+    monkeypatch.setattr(
+        video_parse_module,
+        "real_transcript_evidence",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("ASR HTTP service returned HTTP 503")),
+    )
+
+    def fake_ocr(path):
+        if path.name.endswith("000001.png"):
+            raise RuntimeError("OCR HTTP service returned non-JSON response")
+        return (
+            [
+                {
+                    "content": "second frame text",
+                    "locator": {"bbox": [1, 2, 3, 4]},
+                    "confidence": 0.7,
+                }
+            ],
+            [],
+        )
+
+    monkeypatch.setattr(video_parse_module, "real_ocr_evidence", fake_ocr)
+
+    evidence, warnings, frames = video_parse_module.real_video_outputs(context, serialize_file(file))
+
+    assert frames == [
+        {"timestamp_ms": 1000, "frame_path": first_frame},
+        {"timestamp_ms": 2000, "frame_path": second_frame},
+    ]
+    assert warnings == [NO_VIDEO_AUDIO_WARNING, NO_FRAME_TEXT_WARNING]
+    assert [item["content"] for item in evidence] == ["second frame text"]
+    assert evidence[0]["locator"]["frame_path"] == second_frame
 
 
 def test_extract_video_frames_uses_ffmpeg_interval_and_safe_relative_paths(monkeypatch):

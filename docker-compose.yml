@@ -21,12 +21,15 @@ services:
       VLM_MODEL: ${VLM_MODEL:-}
       LLM_TIMEOUT_SEC: ${LLM_TIMEOUT_SEC:-180}
       LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+      MEDIA_TIMEOUT_SEC: ${MEDIA_TIMEOUT_SEC:-180}
       # The provided backend image is MOCK-only: keep this true unless you build
-      # a custom image with ffmpeg, requirements-optional.txt, and mounted local models.
+      # a custom image with ffmpeg/local models, or point OCR/ASR to HTTP services.
       MOCK_AI: ${MOCK_AI:-true}
       MOCK_LLM: ${MOCK_LLM:-}
       MOCK_MEDIA: ${MOCK_MEDIA:-}
       MOCK_VISION: ${MOCK_VISION:-}
+      OCR_BASE_URL: ${OCR_BASE_URL:-}
+      ASR_BASE_URL: ${ASR_BASE_URL:-}
       OCR_MODEL_DIR: ${OCR_MODEL_DIR:-}
       ASR_MODEL_DIR: ${ASR_MODEL_DIR:-}
       ASR_MODEL_SIZE: ${ASR_MODEL_SIZE:-small}

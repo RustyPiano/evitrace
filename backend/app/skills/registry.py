@@ -11,6 +11,7 @@ from app.config import settings
 from app.constants import SKILL_STATUS_ERROR, SKILL_STATUS_HEALTHY, SKILL_STATUS_SKIPPED, SKILL_STATUS_UNKNOWN
 from app.models import SkillConfig
 from app.schemas import AppError
+from app.services.media_client import check_media_health
 from app.utils.health_details import public_health_detail
 
 from .base import SkillManifest
@@ -136,6 +137,28 @@ def _require_import(module_name: str) -> None:
         raise RuntimeError(f"missing dependency: {module_name}")
 
 
+def _require_http_media_health(base_url: str, *, service_name: str) -> None:
+    health = check_media_health(base_url, service_name=service_name)
+    if health.get("status") != "healthy":
+        raise RuntimeError(health.get("message") or f"{service_name} HTTP service unavailable")
+
+
+def _require_ocr_ready() -> None:
+    if settings.ocr_base_url:
+        _require_http_media_health(settings.ocr_base_url, service_name="OCR")
+        return
+    resolve_ocr_model_dirs()
+    _require_import("paddleocr")
+
+
+def _require_asr_ready() -> None:
+    if settings.asr_base_url:
+        _require_http_media_health(settings.asr_base_url, service_name="ASR")
+        return
+    resolve_asr_model_path()
+    _require_import("faster_whisper")
+
+
 def check_skill_health(db: Session, skill_id: str) -> dict[str, Any]:
     manifest = get_manifest(skill_id)
     config = db.get(SkillConfig, skill_id)
@@ -153,18 +176,14 @@ def check_skill_health(db: Session, skill_id: str) -> dict[str, Any]:
                 _require_import("docx")
                 _require_import("charset_normalizer")
             elif skill_id == "image_ocr" and not settings.effective_mock_media:
-                resolve_ocr_model_dirs()
-                _require_import("paddleocr")
+                _require_ocr_ready()
             elif skill_id == "audio_transcribe" and not settings.effective_mock_media:
-                resolve_asr_model_path()
-                _require_import("faster_whisper")
+                _require_asr_ready()
             elif skill_id == "video_parse" and not settings.effective_mock_media:
                 if shutil.which("ffmpeg") is None:
                     raise RuntimeError("missing executable: ffmpeg")
-                resolve_ocr_model_dirs()
-                resolve_asr_model_path()
-                _require_import("paddleocr")
-                _require_import("faster_whisper")
+                _require_ocr_ready()
+                _require_asr_ready()
             elif skill_id == "visual_understand":
                 from app.services.vision_client import require_vision_config
 

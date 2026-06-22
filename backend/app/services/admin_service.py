@@ -2,7 +2,6 @@ import importlib.util
 import json
 import shutil
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from fastapi import status
@@ -16,6 +15,9 @@ from app.schemas import AdminSkillUpdate, AdminUserCreate, AdminUserUpdate, AppE
 from app.services.audit_service import record_audit
 from app.services.auth_service import hash_password
 from app.services.llm_client import ping_local_llm
+from app.services.media_client import check_media_health
+from app.skills.audio_transcribe import resolve_asr_model_path
+from app.skills.image_ocr import resolve_ocr_model_dirs
 from app.skills.registry import check_skill_health as run_skill_health
 from app.skills.registry import serialize_skill_config, set_skill_enabled
 from app.utils.health_details import redact_health_detail
@@ -238,9 +240,16 @@ def _ffmpeg_health() -> dict[str, str]:
 def _ocr_health() -> dict[str, str]:
     if settings.effective_mock_media:
         return _health_item("ocr", "skipped", "media mock mode enabled")
+    if settings.ocr_base_url:
+        health = check_media_health(settings.ocr_base_url, service_name="OCR")
+        if health.get("status") == "healthy":
+            return _health_item("ocr", "healthy", health.get("message") or "OCR HTTP service ok")
+        return _health_item("ocr", "unavailable", health.get("message") or "OCR HTTP service unavailable")
     if importlib.util.find_spec("paddleocr") is None:
         return _health_item("ocr", "unavailable", "paddleocr dependency not installed")
-    if not _configured_directory_ready(settings.ocr_model_dir):
+    try:
+        resolve_ocr_model_dirs()
+    except RuntimeError:
         return _health_item("ocr", "unavailable", "OCR model directory not ready")
     return _health_item("ocr", "healthy", "OCR dependency and model directory ready")
 
@@ -248,9 +257,16 @@ def _ocr_health() -> dict[str, str]:
 def _asr_health() -> dict[str, str]:
     if settings.effective_mock_media:
         return _health_item("asr", "skipped", "media mock mode enabled")
+    if settings.asr_base_url:
+        health = check_media_health(settings.asr_base_url, service_name="ASR")
+        if health.get("status") == "healthy":
+            return _health_item("asr", "healthy", health.get("message") or "ASR HTTP service ok")
+        return _health_item("asr", "unavailable", health.get("message") or "ASR HTTP service unavailable")
     if importlib.util.find_spec("faster_whisper") is None:
         return _health_item("asr", "unavailable", "faster_whisper dependency not installed")
-    if not _configured_directory_ready(settings.asr_model_dir):
+    try:
+        resolve_asr_model_path()
+    except RuntimeError:
         return _health_item("asr", "unavailable", "ASR model directory not ready")
     return _health_item("asr", "healthy", "ASR dependency and model directory ready")
 
@@ -261,12 +277,6 @@ def _vlm_health() -> dict[str, str]:
     if not settings.vlm_configured:
         return _health_item("vlm", "unavailable", "VLM configuration not ready")
     return _health_item("vlm", "healthy", "VLM configuration ready")
-
-
-def _configured_directory_ready(value: str | None) -> bool:
-    if not value:
-        return False
-    return Path(value).expanduser().is_dir()
 
 
 def _health_item(component: str, status_value: str, detail: str) -> dict[str, str]:

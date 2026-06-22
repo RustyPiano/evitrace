@@ -3,6 +3,7 @@ from time import perf_counter
 from typing import Any
 
 from app.config import PROJECT_ROOT, settings
+from app.services import media_client
 
 from .base import SkillContext, SkillManifest, SkillResult
 from .utils import coerce_items, original_file_path, sidecar_fixture
@@ -21,13 +22,16 @@ def _evidence_from_item(item: dict[str, Any], default_text: str = "") -> dict | 
     text = str(item.get("text") or item.get("content") or default_text).strip()
     if not text:
         return None
-    bbox = item.get("bbox") or [10, 10, 220, 60]
+    bbox = item.get("bbox") or item.get("box") or [10, 10, 220, 60]
+    confidence = item.get("confidence")
+    if confidence is None:
+        confidence = item.get("score")
     return {
         "content": text,
         "modality": "image",
         "evidence_type": "ocr",
         "locator": {"kind": "image", "bbox": [int(value) for value in bbox]},
-        "confidence": item.get("confidence"),
+        "confidence": confidence,
     }
 
 
@@ -76,6 +80,15 @@ def mock_ocr_evidence(context: SkillContext, file_info: dict[str, Any]) -> tuple
 
 
 def real_ocr_evidence(path: Path) -> tuple[list[dict], list[str]]:
+    if settings.ocr_base_url:
+        evidence = []
+        for raw in media_client.ocr_image(settings.ocr_base_url, path):
+            item = _evidence_from_item(raw)
+            if item is not None:
+                evidence.append(item)
+        warnings = [NO_TEXT_WARNING] if not evidence else []
+        return evidence, warnings
+
     global _OCR_MODEL
     if _OCR_MODEL is None:
         from paddleocr import PaddleOCR

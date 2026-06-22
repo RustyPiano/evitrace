@@ -6,6 +6,7 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models import Evidence, SkillConfig, Task, TaskFile, TaskRun
 from app.services import parse_service
+from app.skills import video_parse as video_parse_module
 from app.skills.registry import get_skill as registry_get_skill
 from app.skills.base import SkillResult
 
@@ -230,6 +231,81 @@ def test_visual_understand_failure_warns_without_blocking_image_ocr(client, crea
         assert "visual_understand failed" in file.error_message
         evidence = db.query(Evidence).filter(Evidence.file_id == uploaded["id"]).all()
         assert [item.evidence_type for item in evidence] == ["ocr"]
+
+
+def test_video_asr_and_frame_ocr_failures_mark_warning_and_keep_evidence(client, create_user, monkeypatch):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    [uploaded] = client.post(
+        f"/api/v1/tasks/{task_id}/files",
+        headers=headers,
+        files=[("files", ("clip.mp4", b"\x00\x00\x00\x18ftypmp42", "video/mp4"))],
+    ).json()["data"]
+
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", False)
+    monkeypatch.setattr(video_parse_module.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    monkeypatch.setattr(video_parse_module, "_run_ffmpeg", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        video_parse_module,
+        "real_transcript_evidence",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("ASR HTTP service timeout")),
+    )
+
+    first_frame = f"derived/frames/{uploaded['id']}_frame_000001.png"
+    second_frame = f"derived/frames/{uploaded['id']}_frame_000002.png"
+
+    def fake_extract_video_frames(context, _file_info):
+        for frame_path in (first_frame, second_frame):
+            absolute_frame = settings.data_root_path / "tasks" / context.task_id / frame_path
+            absolute_frame.parent.mkdir(parents=True, exist_ok=True)
+            absolute_frame.write_bytes(b"png")
+        return [
+            {"timestamp_ms": 1000, "frame_path": first_frame},
+            {"timestamp_ms": 2000, "frame_path": second_frame},
+        ]
+
+    def fake_ocr(path):
+        if path.name.endswith("000001.png"):
+            raise RuntimeError("OCR HTTP service returned HTTP 500")
+        return (
+            [
+                {
+                    "content": "kept frame text",
+                    "locator": {"bbox": [1, 2, 3, 4]},
+                    "confidence": 0.91,
+                }
+            ],
+            [],
+        )
+
+    monkeypatch.setattr(video_parse_module, "extract_video_frames", fake_extract_video_frames)
+    monkeypatch.setattr(video_parse_module, "real_ocr_evidence", fake_ocr)
+
+    class EmptyVisualSkill:
+        def run(self, _context, _payload):
+            return SkillResult(success=True, data={"evidence": []})
+
+    def fake_get_skill(skill_id: str):
+        if skill_id == "visual_understand":
+            return EmptyVisualSkill()
+        return registry_get_skill(skill_id)
+
+    monkeypatch.setattr(parse_service, "get_skill", fake_get_skill)
+
+    summary = parse_service.parse_all_files(task_id)
+
+    assert summary.failed_files == 0
+    assert summary.warning_files == 1
+    assert summary.evidence_count == 1
+    with SessionLocal() as db:
+        file = db.get(TaskFile, uploaded["id"])
+        assert file.status == "warning"
+        assert file.error_message == "视频音轨未识别到语音文本; 视频关键帧 OCR 未识别到文本"
+        evidence = db.query(Evidence).filter(Evidence.file_id == uploaded["id"]).one()
+        assert evidence.content == "kept frame text"
+        assert evidence.evidence_type == "video_frame_ocr"
 
 
 def test_corrupt_document_marks_file_failed_without_blocking_other_files(client, create_user):

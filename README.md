@@ -57,15 +57,21 @@ Fully local real AI mode is offline-first and expects you to prepare local servi
   - `VLM_BASE_URL`
   - `VLM_API_KEY`
   - `VLM_MODEL`, for example an image-capable Qwen-VL or GLM-4V model
-- OCR model directory:
-  - `OCR_MODEL_DIR` containing local PaddleOCR `det/` and `rec/` directories, optional `cls/`
-- ASR model directory:
-  - `ASR_MODEL_DIR`
+- OCR:
+  - Preferred: `OCR_BASE_URL`, for example `http://127.0.0.1:8000` on the host or `http://host.docker.internal:8000` from Docker
+  - Fallback: `OCR_MODEL_DIR` containing local PaddleOCR `det/` and `rec/` directories, optional `cls/`
+- ASR:
+  - Preferred: `ASR_BASE_URL`, for example `http://127.0.0.1:8001` on the host or `http://host.docker.internal:8001` from Docker
+  - Fallback: `ASR_MODEL_DIR`
   - `ASR_MODEL_SIZE`, default `small`
+- Media HTTP timeout:
+  - `MEDIA_TIMEOUT_SEC`, default `180`, used for OCR/ASR HTTP inference calls and health probes
 - Video parsing:
   - `ffmpeg` must be available in the runtime environment
 
 The text LLM and visual VLM are separate endpoints. A text-only endpoint such as DeepSeek can be used for extraction/reporting, but visual understanding requires a model that accepts image inputs. The application does not download model weights at runtime. For fully local real mode, keep `MOCK_AI=true` until those local dependencies are installed and verified.
+
+In real media mode (`MOCK_MEDIA=false`, or `MOCK_AI=false` with empty `MOCK_MEDIA`), OCR and ASR prefer HTTP services when `OCR_BASE_URL` or `ASR_BASE_URL` is set. If a URL is empty, the backend falls back to the in-process PaddleOCR or faster-whisper path and requires the local model directory. `MOCK_MEDIA=true` always uses deterministic media fixtures and does not call HTTP services or in-process OCR/ASR libraries.
 
 Visual understanding is controlled separately from local OCR/ASR. Leave `MOCK_VISION` empty for auto mode: if `VLM_BASE_URL`, `VLM_API_KEY`, and `VLM_MODEL` are all set, image and video visual descriptions use the real VLM; otherwise they use caption fixtures. This is independent of `MOCK_MEDIA`, so local OCR/ASR can stay mocked while cloud VLM is real.
 
@@ -89,6 +95,49 @@ VLM_MODEL=Qwen/Qwen3.6-35B-A3B
 此模式下，TXT/PDF 仍由本地解析流程真实提取文本证据，云端 LLM 负责要素事件抽取和报告生成；OCR、ASR、视频关键帧/音轨解析使用 fixture；视觉理解由完整的 `VLM_*` 配置自动切到真实 VLM。视频真实视觉会从原视频按 `VIDEO_FRAME_INTERVAL_SEC` 抽帧；如果 ffmpeg 不可用或 VLM 返回 403、超时、余额不足等错误，视觉理解会降级为 warning，不影响 OCR/ASR/文档解析和任务完成。
 
 VLM 与文本 LLM 是两个独立端点。DeepSeek 等文本模型端点不能替代视觉端点；SiliconFlow 等 VLM 端点需要账户有可用余额。API key 只放在已被 gitignore 的本机 `.env` 中，不要写入代码、README 示例以外的文件、测试 fixture、提交记录或终端输出。
+
+## 本机 HTTP OCR/ASR 服务
+
+如果本机已启动 OCR/ASR HTTP 微服务，真实媒体模式会优先调用这些服务，不再在后端进程内加载 PaddleOCR 或 faster-whisper：
+
+```env
+MOCK_AI=false
+MOCK_MEDIA=false
+OCR_BASE_URL=http://127.0.0.1:8000
+ASR_BASE_URL=http://127.0.0.1:8001
+MEDIA_TIMEOUT_SEC=180
+```
+
+Docker 中后端容器访问宿主机服务时使用：
+
+```env
+OCR_BASE_URL=http://host.docker.internal:8000
+ASR_BASE_URL=http://host.docker.internal:8001
+```
+
+适配服务的 `GET /health` 需返回 JSON：`{"status":"ok","warmed":true}` 或 `{"status":"ok","warmed":false}`。后端健康检查以 `status == "ok"` 判定 OCR/ASR HTTP 服务可用，并读取 `warmed` 作为布尔预热状态。
+
+全真实模式示例：
+
+```env
+MOCK_AI=false
+MOCK_MEDIA=false
+OCR_BASE_URL=http://127.0.0.1:8000
+ASR_BASE_URL=http://127.0.0.1:8001
+LOCAL_LLM_BASE_URL=https://api.deepseek.com/v1
+LOCAL_LLM_API_KEY=<put-your-key-in-private-.env-only>
+LOCAL_LLM_MODEL=deepseek-chat
+VLM_BASE_URL=https://api.siliconflow.cn/v1
+VLM_API_KEY=<put-your-vlm-key-in-private-.env-only>
+VLM_MODEL=Qwen/Qwen3.6-35B-A3B
+```
+
+本机 OCR 服务占用 `8000`，会与后端默认开发端口冲突。本地裸跑后端时请换端口，例如：
+
+```bash
+cd backend
+uvicorn app.main:app --reload --port 8088
+```
 
 ## Docker Startup
 
@@ -116,7 +165,7 @@ Without a `.env`, Docker defaults to:
 
 Data persists in `./data`, including SQLite DB, uploads, derived frames, reports, and the auto-generated Docker secret file.
 
-The provided backend Docker image is for `MOCK_AI=true` demos. It installs core API dependencies only; it does not install system `ffmpeg`, `backend/requirements-optional.txt`, PaddleOCR, faster-whisper, or model weights. The compose healthcheck is an API liveness check and does not prove real OCR/ASR/video/LLM readiness.
+The provided backend Docker image is for `MOCK_AI=true` demos and HTTP-adapter experiments. It installs core API dependencies only; it does not install system `ffmpeg`, `backend/requirements-optional.txt`, PaddleOCR, faster-whisper, or model weights. OCR/ASR can still be real if `OCR_BASE_URL` and `ASR_BASE_URL` point at host HTTP services. Real video parsing still requires `ffmpeg` in the backend runtime. The compose healthcheck is an API liveness check and does not prove real OCR/ASR/video/LLM readiness.
 
 Compose automatically reads a local `.env` if present. That lets you override passwords, model settings, CORS, timeouts, and `MOCK_AI`. For a hardened Docker demo using the provided image, set at least:
 
@@ -127,7 +176,7 @@ FIRST_ADMIN_USERNAME=<admin username>
 FIRST_ADMIN_PASSWORD=<strong non-default password>
 ```
 
-Keep `MOCK_AI=true` with the provided image. Set `MOCK_AI=false` in Docker only after extending the backend image with system `ffmpeg` and `backend/requirements-optional.txt`, mounting prepared `OCR_MODEL_DIR` and `ASR_MODEL_DIR` paths, and pointing `LOCAL_LLM_*` to an OpenAI-compatible local model service.
+Keep `MOCK_AI=true` with the provided image for the zero-config demo. Set `MOCK_AI=false` in Docker only after either configuring `OCR_BASE_URL`/`ASR_BASE_URL` to host HTTP services or extending the backend image with optional OCR/ASR dependencies and mounted model directories. For real video parsing, also add system `ffmpeg`. Point `LOCAL_LLM_*` to an OpenAI-compatible model service before enabling real LLM extraction/reporting.
 
 If `SECRET_KEY` is empty, `change-me`, or shorter than 32 bytes, the backend Docker entrypoint generates a strong key at `./data/.secret_key` and reuses it on restart. Setting a strong `SECRET_KEY` in `.env` takes precedence.
 
@@ -191,7 +240,18 @@ Development URLs:
 - Frontend: `http://localhost:5173`
 - Backend: `http://localhost:8000`
 
-For local real OCR/ASR mode:
+For local real OCR/ASR over HTTP:
+
+```bash
+cd backend
+source .venv/bin/activate
+MOCK_AI=false MOCK_MEDIA=false \
+OCR_BASE_URL=http://127.0.0.1:8000 \
+ASR_BASE_URL=http://127.0.0.1:8001 \
+uvicorn app.main:app --reload --port 8088
+```
+
+For the older in-process OCR/ASR fallback, leave `OCR_BASE_URL` and `ASR_BASE_URL` empty and install optional dependencies:
 
 ```bash
 cd backend

@@ -52,9 +52,12 @@ class Settings(BaseSettings):
     mock_llm: bool | None = Field(default=None, validation_alias="MOCK_LLM")
     mock_media: bool | None = Field(default=None, validation_alias="MOCK_MEDIA")
     mock_vision: bool | None = Field(default=None, validation_alias="MOCK_VISION")
+    ocr_base_url: str | None = Field(default=None, validation_alias="OCR_BASE_URL")
+    asr_base_url: str | None = Field(default=None, validation_alias="ASR_BASE_URL")
     ocr_model_dir: str | None = Field(default=None, validation_alias="OCR_MODEL_DIR")
     asr_model_dir: str | None = Field(default=None, validation_alias="ASR_MODEL_DIR")
     asr_model_size: str = Field(default="small", validation_alias="ASR_MODEL_SIZE")
+    media_timeout_sec: int = Field(default=180, validation_alias="MEDIA_TIMEOUT_SEC")
     ffmpeg_timeout_sec: int = Field(default=120, validation_alias="FFMPEG_TIMEOUT_SEC")
     video_frame_interval_sec: int = Field(
         default=10, validation_alias="VIDEO_FRAME_INTERVAL_SEC"
@@ -87,9 +90,9 @@ class Settings(BaseSettings):
             raise ValueError("must not be empty")
         return value
 
-    @field_validator("ocr_model_dir", "asr_model_dir", mode="before")
+    @field_validator("ocr_base_url", "asr_base_url", "ocr_model_dir", "asr_model_dir", mode="before")
     @classmethod
-    def empty_model_dir_to_none(cls, value: object) -> object:
+    def empty_media_setting_to_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
             return None
         return value

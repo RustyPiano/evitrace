@@ -75,6 +75,52 @@ def test_registry_media_health_uses_mock_media_when_llm_is_real(monkeypatch, tmp
     assert visual["last_status"] == "skipped"
 
 
+def test_registry_media_health_uses_http_services_before_local_models(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", None)
+    monkeypatch.setattr(settings, "ocr_base_url", "http://ocr.local", raising=False)
+    monkeypatch.setattr(settings, "asr_base_url", "http://asr.local", raising=False)
+    monkeypatch.setattr(settings, "ocr_model_dir", str(tmp_path / "missing-ocr"), raising=False)
+    monkeypatch.setattr(settings, "asr_model_dir", str(tmp_path / "missing-asr"), raising=False)
+    calls: list[tuple[str, str]] = []
+
+    def fake_media_health(base_url, *, service_name):
+        calls.append((base_url, service_name))
+        return {"status": "healthy", "message": f"{service_name} HTTP service ok"}
+
+    monkeypatch.setattr("app.skills.registry.check_media_health", fake_media_health)
+
+    with SessionLocal() as db:
+        ocr = check_skill_health(db, "image_ocr")
+        asr = check_skill_health(db, "audio_transcribe")
+
+    assert calls == [("http://ocr.local", "OCR"), ("http://asr.local", "ASR")]
+    assert ocr["last_status"] == "healthy"
+    assert ocr["last_error"] is None
+    assert asr["last_status"] == "healthy"
+    assert asr["last_error"] is None
+
+
+def test_registry_http_media_health_error_is_redacted(monkeypatch):
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", None)
+    monkeypatch.setattr(settings, "ocr_base_url", "http://secret-ocr.local", raising=False)
+
+    def fake_media_health(_base_url, *, service_name):
+        return {
+            "status": "unavailable",
+            "message": f"{service_name} probe failed at {settings.ocr_base_url}",
+        }
+
+    monkeypatch.setattr("app.skills.registry.check_media_health", fake_media_health)
+
+    with SessionLocal() as db:
+        ocr = check_skill_health(db, "image_ocr")
+
+    assert ocr["last_status"] == SKILL_STATUS_ERROR
+    assert ocr["last_error"] == "OCR probe failed at [ocr-base-url]"
+
+
 def test_visual_understand_health_is_real_when_vlm_configured_even_if_media_is_mocked(monkeypatch):
     monkeypatch.setattr(settings, "mock_ai", False)
     monkeypatch.setattr(settings, "mock_media", True)
@@ -110,6 +156,8 @@ def test_health_detail_redacts_sensitive_settings(monkeypatch, tmp_path):
     asr_dir = tmp_path / "private-asr"
     monkeypatch.setattr(settings, "ocr_model_dir", str(ocr_dir), raising=False)
     monkeypatch.setattr(settings, "asr_model_dir", str(asr_dir), raising=False)
+    monkeypatch.setattr(settings, "ocr_base_url", "http://secret-ocr.local", raising=False)
+    monkeypatch.setattr(settings, "asr_base_url", "http://secret-asr.local", raising=False)
     monkeypatch.setattr(settings, "local_llm_base_url", "http://secret-llm.local/v1", raising=False)
     monkeypatch.setattr(settings, "local_llm_api_key", "private-api-key", raising=False)
     monkeypatch.setattr(settings, "vlm_base_url", "https://secret-vlm.local/v1", raising=False)
@@ -117,6 +165,7 @@ def test_health_detail_redacts_sensitive_settings(monkeypatch, tmp_path):
 
     detail = redact_health_detail(
         f"{settings.data_root_path} {ocr_dir} {asr_dir} "
+        f"{settings.ocr_base_url} {settings.asr_base_url} "
         f"{settings.secret_key} {settings.local_llm_base_url} {settings.local_llm_api_key} "
         f"{settings.vlm_base_url} {settings.vlm_api_key}"
     )
@@ -124,6 +173,8 @@ def test_health_detail_redacts_sensitive_settings(monkeypatch, tmp_path):
     assert str(settings.data_root_path) not in detail
     assert str(ocr_dir) not in detail
     assert str(asr_dir) not in detail
+    assert settings.ocr_base_url not in detail
+    assert settings.asr_base_url not in detail
     assert settings.secret_key not in detail
     assert settings.local_llm_base_url not in detail
     assert settings.local_llm_api_key not in detail

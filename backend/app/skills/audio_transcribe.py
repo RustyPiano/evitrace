@@ -3,6 +3,7 @@ from time import perf_counter
 from typing import Any
 
 from app.config import PROJECT_ROOT, settings
+from app.services import media_client
 
 from .base import SkillContext, SkillManifest, SkillResult
 from .utils import coerce_items, original_file_path, sidecar_fixture
@@ -42,15 +43,27 @@ def _segment_evidence(
     text = str(segment.get("text") or segment.get("content") or "").strip()
     if not text:
         return None
-    start_ms = int(segment.get("start_ms", 0))
-    end_ms = int(segment.get("end_ms", start_ms))
+    speaker = str(segment.get("speaker") or "").strip()
+    content = f"[{speaker}] {text}" if speaker else text
+    start_ms = _segment_time_ms(segment, "start", "start_ms", 0)
+    end_ms = _segment_time_ms(segment, "end", "end_ms", start_ms)
     return {
-        "content": text,
+        "content": content,
         "modality": modality,
         "evidence_type": "asr",
         "locator": {"kind": locator_kind, "start_ms": start_ms, "end_ms": end_ms},
         "confidence": segment.get("confidence"),
     }
+
+
+def _segment_time_ms(segment: dict[str, Any], seconds_key: str, ms_key: str, default_ms: int) -> int:
+    if ms_key in segment:
+        value = segment.get(ms_key)
+        return int(default_ms if value is None else value)
+    if seconds_key in segment:
+        value = segment.get(seconds_key)
+        return default_ms if value is None else int(float(value) * 1000)
+    return default_ms
 
 
 def mock_transcript_evidence(
@@ -82,6 +95,16 @@ def real_transcript_evidence(
     modality: str = "audio",
     locator_kind: str = "audio",
 ) -> tuple[list[dict], list[str]]:
+    if settings.asr_base_url:
+        evidence = []
+        transcript = media_client.asr_audio(settings.asr_base_url, path)
+        for segment in transcript.get("segments", []):
+            item = _segment_evidence(segment, modality=modality, locator_kind=locator_kind)
+            if item is not None:
+                evidence.append(item)
+        warnings = [NO_SPEECH_WARNING] if not evidence else []
+        return evidence, warnings
+
     global _ASR_MODEL
     if _ASR_MODEL is None:
         from faster_whisper import WhisperModel

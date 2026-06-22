@@ -18,6 +18,11 @@ class FfmpegTimeoutError(RuntimeError):
     pass
 
 
+def _append_warning_once(warnings: list[str], warning: str) -> None:
+    if warning not in warnings:
+        warnings.append(warning)
+
+
 def _write_placeholder_frame(context: SkillContext, file_info: dict[str, Any], index: int) -> str:
     frames_dir = ensure_derived_dir(context, "frames")
     filename = f"{file_info['id']}_mock_frame_{index:06d}.png"
@@ -195,15 +200,21 @@ def real_video_outputs(context: SkillContext, file_info: dict[str, Any]) -> tupl
     except FfmpegTimeoutError:
         raise
     except RuntimeError:
-        warnings.append(NO_VIDEO_AUDIO_WARNING)
+        _append_warning_once(warnings, NO_VIDEO_AUDIO_WARNING)
     else:
-        evidence, audio_warnings = real_transcript_evidence(
-            audio_path,
-            modality="video",
-            locator_kind="video_audio",
-        )
-        if audio_warnings:
-            warnings.append(NO_VIDEO_AUDIO_WARNING)
+        try:
+            evidence, audio_warnings = real_transcript_evidence(
+                audio_path,
+                modality="video",
+                locator_kind="video_audio",
+            )
+        except FfmpegTimeoutError:
+            raise
+        except RuntimeError:
+            _append_warning_once(warnings, NO_VIDEO_AUDIO_WARNING)
+        else:
+            if audio_warnings:
+                _append_warning_once(warnings, NO_VIDEO_AUDIO_WARNING)
 
     frames = extract_video_frames(context, file_info)
 
@@ -211,7 +222,11 @@ def real_video_outputs(context: SkillContext, file_info: dict[str, Any]) -> tupl
     for frame in frames:
         relative_path = frame["frame_path"]
         timestamp_ms = int(frame["timestamp_ms"])
-        ocr_items, _ = real_ocr_evidence(derived_path(context, relative_path))
+        try:
+            ocr_items, _ = real_ocr_evidence(derived_path(context, relative_path))
+        except RuntimeError:
+            _append_warning_once(warnings, NO_FRAME_TEXT_WARNING)
+            continue
         for ocr_item in ocr_items:
             locator = ocr_item["locator"]
             frame_evidence.append(
@@ -230,7 +245,7 @@ def real_video_outputs(context: SkillContext, file_info: dict[str, Any]) -> tupl
             )
 
     if not frame_evidence:
-        warnings.append(NO_FRAME_TEXT_WARNING)
+        _append_warning_once(warnings, NO_FRAME_TEXT_WARNING)
     return evidence + frame_evidence, warnings, frames
 
 

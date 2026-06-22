@@ -48,22 +48,40 @@ def test_local_model_and_ffmpeg_timeout_settings_are_configurable():
     settings = Settings(
         SECRET_KEY="x" * 32,
         FIRST_ADMIN_PASSWORD="not-default-admin-password",
+        OCR_BASE_URL="http://127.0.0.1:8000",
+        ASR_BASE_URL="http://127.0.0.1:8001",
         OCR_MODEL_DIR="/models/ocr",
         ASR_MODEL_DIR="/models/asr",
         ASR_MODEL_SIZE="small",
+        MEDIA_TIMEOUT_SEC=240,
         FFMPEG_TIMEOUT_SEC=30,
         VLM_BASE_URL="http://vlm.local/v1",
         VLM_API_KEY="vlm-key",
         VLM_MODEL="qwen-vl",
     )
 
+    assert settings.ocr_base_url == "http://127.0.0.1:8000"
+    assert settings.asr_base_url == "http://127.0.0.1:8001"
     assert settings.ocr_model_dir == "/models/ocr"
     assert settings.asr_model_dir == "/models/asr"
     assert settings.asr_model_size == "small"
+    assert settings.media_timeout_sec == 240
     assert settings.ffmpeg_timeout_sec == 30
     assert settings.vlm_base_url == "http://vlm.local/v1"
     assert settings.vlm_api_key == "vlm-key"
     assert settings.vlm_model == "qwen-vl"
+
+
+def test_empty_media_service_urls_become_none():
+    settings = Settings(
+        SECRET_KEY="x" * 32,
+        FIRST_ADMIN_PASSWORD="not-default-admin-password",
+        OCR_BASE_URL="",
+        ASR_BASE_URL="  ",
+    )
+
+    assert settings.ocr_base_url is None
+    assert settings.asr_base_url is None
 
 
 def test_mock_llm_and_media_default_to_mock_ai():

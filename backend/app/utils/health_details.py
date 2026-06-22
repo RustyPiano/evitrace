@@ -14,6 +14,10 @@ def _sensitive_values() -> Iterable[tuple[str, str]]:
     ]
     if settings.vlm_base_url:
         values.append(("[vlm-base-url]", settings.vlm_base_url))
+    if settings.ocr_base_url:
+        values.append(("[ocr-base-url]", settings.ocr_base_url))
+    if settings.asr_base_url:
+        values.append(("[asr-base-url]", settings.asr_base_url))
     if settings.local_llm_api_key and settings.local_llm_api_key != "local":
         values.append(("[llm-api-key]", settings.local_llm_api_key))
     if settings.vlm_api_key:
