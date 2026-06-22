@@ -90,7 +90,8 @@ python scripts/build_demo_data.py
 评估结果文件：
 
 - `evaluation_result.md`
-- `scripts/ab_result.md`
+- `scripts/ab_result.md` — 真实 DeepSeek + 媒体 fixture 的控制变量 A/B（B 冲突召回 1.00、0 无依据结论、100% 有效引用；A 直出 0.67 召回、17 无依据结论）。
+- `scripts/ab_result_full_real.md` — 全真实栈（PaddleOCR + FunASR + Qwen-VL + DeepSeek）的 A/B；端到端跑通，case_03 真实多模态抽取未复现植入的数量冲突，印证 fixture 指标 ≠ 真实模型准确率。详见 `实验报告.md` §7.4。
 
 ## 测试命令
 
