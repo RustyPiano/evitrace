@@ -1190,7 +1190,7 @@ def validate_report(report: str, valid_ids: set[str]) -> CitationCheck:
 - [x] 3 组演示数据；
 - [x] `evaluation_result.md`；
 - [x] README；
-- [x] 系统截图；
+- [ ] 系统截图（占位，演示时人工补充）；
 - [x] 课程汇报中的架构、流程、创新点和验证结果。
 
 完成上述清单即视为 MVP 交付完成。

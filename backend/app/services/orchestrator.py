@@ -267,7 +267,12 @@ def execute_run(task_id: str, run_id: str) -> None:
             )
 
             _update_state(db, task, run, task_status=TASK_STATUS_PARSING, progress=10, current_step="parsing")
-            parse_summary = parse_service.parse_all_files(task_id)
+            parse_summary = parse_service.parse_all_files(
+                task_id,
+                run_id=run.id,
+                progress_start=10,
+                progress_end=45,
+            )
             warnings.extend(parse_summary.warnings)
             warnings.extend(parse_summary.errors)
             _update_state(db, task, run, task_status=TASK_STATUS_PARSING, progress=45, current_step="parsing")

@@ -102,6 +102,8 @@ export interface CitationCheck {
   citation_coverage: number;
   conclusion_paragraph_count?: number;
   cited_conclusion_paragraph_count?: number;
+  uncited_sections?: string[];
+  uncited_fact_count?: number;
 }
 
 export interface AnalysisResult {

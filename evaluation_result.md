@@ -10,12 +10,13 @@
     "overall_conflict_recall": 1.0,
     "min_citation_coverage": 1.0,
     "invalid_reference_count": 0,
+    "uncited_fact_count": 0,
     "all_required_modalities": true
   },
   "cases": [
     {
       "case": "case_01_time_conflict",
-      "task_id": "9475a462b3bc4de98b2d57cd89f1c65d",
+      "task_id": "2fa10e6ab7294d86866b055ec0ecf3ae",
       "task_status": "awaiting_review",
       "run_status": "succeeded",
       "expected_conflict_count": 1,
@@ -27,6 +28,8 @@
       "citation_coverage": 1.0,
       "invalid_reference_count": 0,
       "invalid_citations": [],
+      "uncited_fact_count": 0,
+      "uncited_sections": [],
       "modalities": [
         "audio",
         "image",
@@ -44,7 +47,7 @@
     },
     {
       "case": "case_02_location_conflict",
-      "task_id": "e5c3fd7f409a47f5a1933184d3274301",
+      "task_id": "677ea204efcc4ec59bfcb60865af7d04",
       "task_status": "awaiting_review",
       "run_status": "succeeded",
       "expected_conflict_count": 1,
@@ -56,6 +59,8 @@
       "citation_coverage": 1.0,
       "invalid_reference_count": 0,
       "invalid_citations": [],
+      "uncited_fact_count": 0,
+      "uncited_sections": [],
       "modalities": [
         "audio",
         "image",
@@ -73,7 +78,7 @@
     },
     {
       "case": "case_03_quantity_conflict",
-      "task_id": "b6e2d22341a045128a4a92dc6158cfe8",
+      "task_id": "6be262983e71499095aee1bf31339f47",
       "task_status": "awaiting_review",
       "run_status": "succeeded",
       "expected_conflict_count": 1,
@@ -85,6 +90,8 @@
       "citation_coverage": 1.0,
       "invalid_reference_count": 0,
       "invalid_citations": [],
+      "uncited_fact_count": 0,
+      "uncited_sections": [],
       "modalities": [
         "audio",
         "image",
@@ -106,9 +113,9 @@
 
 ## Case Table
 
-| Case | Expected | Found | Recall | Report refs | Valid refs | Citation coverage | Invalid refs | Four modalities |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-| case_01_time_conflict | 1 | 1 | 1.00 | 6 | 6 | 1.00 | 0 | yes |
-| case_02_location_conflict | 1 | 1 | 1.00 | 6 | 6 | 1.00 | 0 | yes |
-| case_03_quantity_conflict | 1 | 1 | 1.00 | 5 | 5 | 1.00 | 0 | yes |
+| Case | Expected | Found | Recall | Report refs | Valid refs | Citation coverage | Invalid refs | Uncited facts | Four modalities |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| case_01_time_conflict | 1 | 1 | 1.00 | 6 | 6 | 1.00 | 0 | 0 | yes |
+| case_02_location_conflict | 1 | 1 | 1.00 | 6 | 6 | 1.00 | 0 | 0 | yes |
+| case_03_quantity_conflict | 1 | 1 | 1.00 | 5 | 5 | 1.00 | 0 | 0 | yes |
 

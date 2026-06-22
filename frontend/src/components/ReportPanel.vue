@@ -154,7 +154,7 @@ function escapeHtml(value: string): string {
 function renderInlineMarkdown(value: string, invalidSet: Set<string>): string {
   return escapeHtml(value)
     .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\[(E-\d{4})\]/g, (_match, displayId: string) => {
+    .replace(/\[(E-\d{4,})\]/g, (_match, displayId: string) => {
       const invalidClass = invalidSet.has(displayId) ? " invalid" : "";
       return `<button type="button" class="citation-button${invalidClass}" data-citation="${displayId}">[${displayId}]</button>`;
     });

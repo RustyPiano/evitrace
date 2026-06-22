@@ -112,6 +112,8 @@ class CitationCheck(AnalysisBaseModel):
     citation_coverage: float = Field(default=1.0, ge=0, le=1)
     conclusion_paragraph_count: int = 0
     cited_conclusion_paragraph_count: int = 0
+    uncited_sections: list[str] = Field(default_factory=list)
+    uncited_fact_count: int = 0
 
 
 class ConflictStatusUpdate(BaseModel):

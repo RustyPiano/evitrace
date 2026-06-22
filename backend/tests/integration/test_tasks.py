@@ -223,6 +223,30 @@ def test_completing_task_rejects_invalid_citations_even_for_admin_force(client, 
     assert response.json()["detail"]["code"] == "INVALID_CITATIONS_PRESENT"
 
 
+def test_completing_task_rejects_uncited_timeline_or_conflict_facts_even_for_admin_force(
+    client, create_user
+):
+    task_id = _create_task(client, login_headers(client, "admin", "admin-password"))
+    _mark_awaiting_review_with_citation_check(
+        task_id,
+        {
+            "invalid_citations": [],
+            "citation_coverage": 1.0,
+            "uncited_sections": ["三、事件时间线"],
+            "uncited_fact_count": 1,
+        },
+    )
+
+    response = client.patch(
+        f"/api/v1/tasks/{task_id}",
+        headers=login_headers(client, "admin", "admin-password"),
+        json={"status": "completed", "force": True},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "UNCITED_REPORT_FACTS_PRESENT"
+
+
 def test_delete_task_cascades_business_records_keeps_audit_logs_and_removes_directory(
     client, create_user
 ):

@@ -189,6 +189,7 @@ def evaluate_case(client: Any, headers: dict[str, str], case_name: str, data_roo
     citation_check = results.get("citation_check") or {}
     used_citations = list(citation_check.get("used_citations") or [])
     invalid_citations = list(citation_check.get("invalid_citations") or [])
+    uncited_fact_count = int(citation_check.get("uncited_fact_count") or 0)
     modalities = sorted({item.get("modality") for item in evidence_items if item.get("modality")})
     required_modalities = set(expected.get("required_evidence_modalities") or [])
     modal_complete = required_modalities.issubset(set(modalities))
@@ -207,6 +208,8 @@ def evaluate_case(client: Any, headers: dict[str, str], case_name: str, data_roo
         "citation_coverage": float(citation_check.get("citation_coverage") or 0),
         "invalid_reference_count": len(invalid_citations),
         "invalid_citations": invalid_citations,
+        "uncited_fact_count": uncited_fact_count,
+        "uncited_sections": list(citation_check.get("uncited_sections") or []),
         "modalities": modalities,
         "all_required_modalities": modal_complete,
         "matched_expected_conflicts": [
@@ -219,14 +222,14 @@ def evaluate_case(client: Any, headers: dict[str, str], case_name: str, data_roo
 
 def markdown_table(rows: list[dict[str, Any]]) -> str:
     lines = [
-        "| Case | Expected | Found | Recall | Report refs | Valid refs | Citation coverage | Invalid refs | Four modalities |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|---|",
+        "| Case | Expected | Found | Recall | Report refs | Valid refs | Citation coverage | Invalid refs | Uncited facts | Four modalities |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
     ]
     for row in rows:
         lines.append(
             "| {case} | {expected_conflict_count} | {found_conflict_count} | {conflict_recall:.2f} | "
             "{report_reference_count} | {valid_reference_count} | {citation_coverage:.2f} | "
-            "{invalid_reference_count} | {modalities_ok} |".format(
+            "{invalid_reference_count} | {uncited_fact_count} | {modalities_ok} |".format(
                 **row,
                 modalities_ok="yes" if row["all_required_modalities"] else "no",
             )
@@ -245,6 +248,7 @@ def write_result(rows: list[dict[str, Any]]) -> None:
         ),
         "min_citation_coverage": min((row["citation_coverage"] for row in rows), default=1.0),
         "invalid_reference_count": sum(row["invalid_reference_count"] for row in rows),
+        "uncited_fact_count": sum(row["uncited_fact_count"] for row in rows),
         "all_required_modalities": all(row["all_required_modalities"] for row in rows),
     }
     body = "\n\n".join(
@@ -292,6 +296,7 @@ def main() -> int:
             or row["conflict_recall"] < 0.8
             or row["citation_coverage"] < 0.9
             or row["invalid_reference_count"] != 0
+            or row["uncited_fact_count"] != 0
             or not row["all_required_modalities"]
         ]
         if failed:

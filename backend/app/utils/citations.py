@@ -2,9 +2,15 @@ import re
 
 from app.schemas_analysis import CitationCheck
 
-CITATION_RE = re.compile(r"E-\d{4}")
+CITATION_RE = re.compile(r"E-\d{4,}")
 SECTION_RE = re.compile(r"^##\s+", re.MULTILINE)
 CONCLUSION_HEADING_RE = re.compile(r"^##\s*五、\s*综合分析结论", re.MULTILINE)
+TIMELINE_HEADING_RE = re.compile(r"^##\s*三、\s*事件时间线", re.MULTILINE)
+CONFLICT_HEADING_RE = re.compile(r"^##\s*四、\s*主要冲突", re.MULTILINE)
+FACT_SECTION_PATTERNS = [
+    ("三、事件时间线", TIMELINE_HEADING_RE),
+    ("四、主要冲突", CONFLICT_HEADING_RE),
+]
 
 
 def ordered_unique(values: list[str]) -> list[str]:
@@ -18,14 +24,23 @@ def ordered_unique(values: list[str]) -> list[str]:
     return ordered
 
 
-def extract_conclusion_paragraphs(markdown: str) -> list[str]:
-    match = CONCLUSION_HEADING_RE.search(markdown)
+def extract_section_body(markdown: str, heading_re: re.Pattern[str]) -> str:
+    match = heading_re.search(markdown)
     if match is None:
-        return []
+        return ""
     body_start = match.end()
     next_match = SECTION_RE.search(markdown, body_start)
-    body = markdown[body_start : next_match.start() if next_match else len(markdown)]
+    return markdown[body_start : next_match.start() if next_match else len(markdown)]
+
+
+def extract_conclusion_paragraphs(markdown: str) -> list[str]:
+    body = extract_section_body(markdown, CONCLUSION_HEADING_RE)
     return [paragraph.strip() for paragraph in re.split(r"\n\s*\n", body) if paragraph.strip()]
+
+
+def extract_fact_lines(markdown: str, heading_re: re.Pattern[str]) -> list[str]:
+    body = extract_section_body(markdown, heading_re)
+    return [line.strip() for line in body.splitlines() if line.strip()]
 
 
 def validate_report_citations(markdown: str, valid_ids: set[str]) -> CitationCheck:
@@ -34,6 +49,19 @@ def validate_report_citations(markdown: str, valid_ids: set[str]) -> CitationChe
     paragraphs = extract_conclusion_paragraphs(markdown)
     cited = [paragraph for paragraph in paragraphs if CITATION_RE.search(paragraph)]
     coverage = len(cited) / len(paragraphs) if paragraphs else 1.0
+    uncited_sections: list[str] = []
+    uncited_fact_count = 0
+    for section_name, heading_re in FACT_SECTION_PATTERNS:
+        section_uncited = 0
+        for line in extract_fact_lines(markdown, heading_re):
+            line_citations = set(CITATION_RE.findall(line))
+            if line_citations & valid_ids:
+                continue
+            section_uncited += 1
+        if section_uncited:
+            uncited_sections.append(section_name)
+            uncited_fact_count += section_uncited
+
     return CitationCheck(
         used_citations=used,
         invalid_citations=invalid,
@@ -42,4 +70,6 @@ def validate_report_citations(markdown: str, valid_ids: set[str]) -> CitationChe
         citation_coverage=coverage,
         conclusion_paragraph_count=len(paragraphs),
         cited_conclusion_paragraph_count=len(cited),
+        uncited_sections=uncited_sections,
+        uncited_fact_count=uncited_fact_count,
     )

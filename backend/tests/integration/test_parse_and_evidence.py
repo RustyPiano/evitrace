@@ -1,9 +1,12 @@
 from io import BytesIO
 
+import pytest
+
 from app.config import settings
 from app.database import SessionLocal
 from app.models import Evidence, SkillConfig, Task, TaskFile, TaskRun
 from app.services import parse_service
+from app.skills.base import SkillResult
 
 from tests.conftest import login_headers
 
@@ -189,6 +192,75 @@ def test_corrupt_document_marks_file_failed_without_blocking_other_files(client,
         assert files["broken.pdf"].status == "failed"
         assert files["note.txt"].status == "parsed"
         assert db.query(Evidence).filter(Evidence.file_id == files["note.txt"].id).count() == 1
+
+
+def test_parse_error_details_are_redacted_in_db_summary_and_task_detail(client, create_user, monkeypatch):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    [uploaded] = client.post(
+        f"/api/v1/tasks/{task_id}/files",
+        headers=headers,
+        files=[("files", ("note.txt", b"ready", "text/plain"))],
+    ).json()["data"]
+    sensitive_path = settings.data_root_path / "tasks" / task_id / "original" / uploaded["stored_name"]
+
+    class FailingSkill:
+        def run(self, _context, _payload):
+            return SkillResult(
+                success=False,
+                errors=[f"task_id={task_id} file_id={uploaded['id']} failed reading {sensitive_path}"],
+            )
+
+    monkeypatch.setattr(parse_service, "get_skill", lambda _skill_id: FailingSkill())
+
+    summary = parse_service.parse_all_files(task_id)
+
+    assert summary.failed_files == 1
+    assert str(settings.data_root_path) not in summary.errors[0]
+    assert "[data-root]" in summary.errors[0]
+    assert task_id in summary.errors[0]
+    assert uploaded["id"] in summary.errors[0]
+    with SessionLocal() as db:
+        file = db.get(TaskFile, uploaded["id"])
+        assert str(settings.data_root_path) not in file.error_message
+        assert "[data-root]" in file.error_message
+
+    detail = client.get(f"/api/v1/tasks/{task_id}", headers=headers).json()["data"]
+    returned_error = detail["files"][0]["error_message"]
+    assert str(settings.data_root_path) not in returned_error
+    assert "[data-root]" in returned_error
+
+
+def test_parse_endpoint_top_level_error_redacts_task_last_error(client, create_user, monkeypatch):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    client.post(
+        f"/api/v1/tasks/{task_id}/files",
+        headers=headers,
+        files=[("files", ("note.txt", b"ready", "text/plain"))],
+    )
+    sensitive_path = settings.data_root_path / "models" / "ocr"
+
+    def fail_parse(_task_id: str):
+        raise RuntimeError(f"task_id={task_id} cannot open {sensitive_path}")
+
+    monkeypatch.setattr(parse_service, "parse_all_files", fail_parse)
+
+    with pytest.raises(RuntimeError):
+        parse_service.parse_task_files_for_endpoint(task_id)
+
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        assert task.status == "failed"
+        assert str(settings.data_root_path) not in task.last_error
+        assert "[data-root]" in task.last_error
+        assert task_id in task.last_error
+
+    detail = client.get(f"/api/v1/tasks/{task_id}", headers=headers).json()["data"]
+    assert str(settings.data_root_path) not in detail["last_error"]
+    assert "[data-root]" in detail["last_error"]
 
 
 def test_parse_all_files_does_not_finalize_task_or_run_when_file_fails(client, create_user):

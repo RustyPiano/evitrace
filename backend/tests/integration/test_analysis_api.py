@@ -211,6 +211,45 @@ def test_orchestrator_progress_updates_are_monotonic(client, create_user, monkey
     assert seen[-1] == 100
 
 
+def test_execute_run_passes_run_id_and_parse_progress_window(client, create_user, monkeypatch):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    _upload_text(client, headers, task_id)
+    with SessionLocal() as db:
+        owner = db.query(Task).filter(Task.id == task_id).one().owner
+        run = orchestrator.start_run(db, task_id, owner)
+        run_id = run.id
+
+    call_args: dict[str, object] = {}
+
+    def fake_parse(_task_id: str, run_id: str | None = None, progress_start: int = 0, progress_end: int = 100):
+        call_args.update(
+            {
+                "task_id": _task_id,
+                "run_id": run_id,
+                "progress_start": progress_start,
+                "progress_end": progress_end,
+            }
+        )
+        return orchestrator.parse_service.ParseSummary(task_id=_task_id, run_id=run_id)
+
+    def stop_after_parse(_db, _task_id):
+        raise RuntimeError("stop after parse")
+
+    monkeypatch.setattr(orchestrator.parse_service, "parse_all_files", fake_parse)
+    monkeypatch.setattr(orchestrator, "_list_evidence", stop_after_parse)
+
+    orchestrator.execute_run(task_id, run_id)
+
+    assert call_args == {
+        "task_id": task_id,
+        "run_id": run_id,
+        "progress_start": 10,
+        "progress_end": 45,
+    }
+
+
 def test_recover_interrupted_runs_marks_running_records_failed():
     with SessionLocal() as db:
         task = Task(name="Interrupted", objective="Recover", owner_id="admin", status="parsing")
@@ -255,7 +294,7 @@ def test_execute_run_exception_marks_run_failed_terminal(client, create_user, mo
         run = orchestrator.start_run(db, task_id, owner)
         run_id = run.id
 
-    def fail_parse(_task_id: str):
+    def fail_parse(_task_id: str, **_kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(orchestrator.parse_service, "parse_all_files", fail_parse)

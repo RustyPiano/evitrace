@@ -21,6 +21,7 @@ from app.services.storage_service import PARSER_SKILL_BY_MODALITY, task_director
 from app.services.task_service import serialize_file, task_not_found
 from app.skills.base import SkillContext
 from app.skills.registry import get_skill, is_enabled
+from app.utils.health_details import redact_health_detail
 
 
 class ParseSummary(BaseModel):
@@ -76,7 +77,28 @@ def _validate_frame_paths(task_id: str, items: list[dict[str, Any]]) -> None:
             raise AppError("FORBIDDEN", "关键帧路径非法", status.HTTP_403_FORBIDDEN)
 
 
-def _mark_run_progress(db, run_id: str | None, index: int, total: int, current_step: str | None) -> None:
+def _clamp_progress(value: int) -> int:
+    return max(0, min(100, value))
+
+
+def _scaled_progress(index: int, total: int, progress_start: int, progress_end: int) -> int:
+    start = _clamp_progress(progress_start)
+    end = max(start, _clamp_progress(progress_end))
+    if total <= 0:
+        return end
+    bounded_index = max(0, min(total, index))
+    return int(start + ((end - start) * bounded_index / total))
+
+
+def _mark_run_progress(
+    db,
+    run_id: str | None,
+    index: int,
+    total: int,
+    current_step: str | None,
+    progress_start: int,
+    progress_end: int,
+) -> None:
     if run_id is None:
         return
     run = db.get(TaskRun, run_id)
@@ -84,7 +106,16 @@ def _mark_run_progress(db, run_id: str | None, index: int, total: int, current_s
         return
     run.status = RUN_STATUS_RUNNING
     run.current_step = current_step
-    run.progress = int(index / total * 100) if total else 0
+    run.progress = max(run.progress or 0, _scaled_progress(index, total, progress_start, progress_end))
+
+
+def _safe_parse_detail(value: object) -> str:
+    return redact_health_detail(value)
+
+
+def _safe_join_details(values: list[str], fallback: str) -> str:
+    safe_values = [_safe_parse_detail(value) for value in values if str(value or "").strip()]
+    return "; ".join(safe_values) or fallback
 
 
 def _cleanup_file_derived_artifacts(task_id: str, file_id: str) -> None:
@@ -101,11 +132,16 @@ def _cleanup_file_derived_artifacts(task_id: str, file_id: str) -> None:
 
 
 def _summary_message(summary: ParseSummary) -> str | None:
-    combined = summary.errors + summary.warnings
+    combined = [_safe_parse_detail(item) for item in summary.errors + summary.warnings]
     return "; ".join(combined)[:1000] if combined else None
 
 
-def parse_all_files(task_id: str, run_id: str | None = None) -> ParseSummary:
+def parse_all_files(
+    task_id: str,
+    run_id: str | None = None,
+    progress_start: int = 0,
+    progress_end: int = 100,
+) -> ParseSummary:
     summary = ParseSummary(task_id=task_id, run_id=run_id)
     with SessionLocal() as db:
         task = db.get(Task, task_id)
@@ -124,11 +160,20 @@ def parse_all_files(task_id: str, run_id: str | None = None) -> ParseSummary:
             run = db.get(TaskRun, run_id)
             if run is not None:
                 run.status = RUN_STATUS_RUNNING
-                run.progress = 0
+                run.progress = max(run.progress or 0, _clamp_progress(progress_start))
                 run.current_step = "parsing"
         db.commit()
 
         summary.total_files = len(files)
+        mark_progress = lambda current_index, current_step: _mark_run_progress(
+            db,
+            run_id,
+            current_index,
+            len(files),
+            current_step,
+            progress_start,
+            progress_end,
+        )
         for index, file in enumerate(files, start=1):
             skill_id = PARSER_SKILL_BY_MODALITY.get(file.modality)
             result_service.delete_file_evidence(db, file.id)
@@ -138,7 +183,7 @@ def parse_all_files(task_id: str, run_id: str | None = None) -> ParseSummary:
                 file.error_message = f"unsupported modality: {file.modality}"
                 summary.warning_files += 1
                 summary.warnings.append(f"{file.original_name}: {file.error_message}")
-                _mark_run_progress(db, run_id, index, len(files), file.original_name)
+                mark_progress(index, file.original_name)
                 db.commit()
                 continue
 
@@ -147,13 +192,13 @@ def parse_all_files(task_id: str, run_id: str | None = None) -> ParseSummary:
                 file.error_message = f"{skill_id} disabled"
                 summary.warning_files += 1
                 summary.warnings.append(f"{file.original_name}: {file.error_message}")
-                _mark_run_progress(db, run_id, index, len(files), file.original_name)
+                mark_progress(index, file.original_name)
                 db.commit()
                 continue
 
             file.status = FILE_STATUS_PARSING
             file.error_message = None
-            _mark_run_progress(db, run_id, index - 1, len(files), file.original_name)
+            mark_progress(index - 1, file.original_name)
             db.commit()
 
             try:
@@ -161,12 +206,12 @@ def parse_all_files(task_id: str, run_id: str | None = None) -> ParseSummary:
                 context = SkillContext(task_id=task.id, run_id=run_id, data_root=str(settings.data_root_path))
                 result = skill.run(context, {"file": serialize_file(file)})
                 if not result.success:
-                    message = "; ".join(result.errors) or "解析失败"
+                    message = _safe_join_details(result.errors, "解析失败")
                     file.status = FILE_STATUS_FAILED
                     file.error_message = message
                     summary.failed_files += 1
                     summary.errors.append(f"{file.original_name}: {message}")
-                    _mark_run_progress(db, run_id, index, len(files), file.original_name)
+                    mark_progress(index, file.original_name)
                     db.commit()
                     continue
 
@@ -179,22 +224,23 @@ def parse_all_files(task_id: str, run_id: str | None = None) -> ParseSummary:
                 summary.evidence_count += len(created)
 
                 if result.warnings:
+                    warnings = [_safe_parse_detail(warning) for warning in result.warnings]
                     file.status = FILE_STATUS_WARNING
-                    file.error_message = "; ".join(result.warnings)
+                    file.error_message = "; ".join(warnings)
                     summary.warning_files += 1
-                    summary.warnings.extend(f"{file.original_name}: {warning}" for warning in result.warnings)
+                    summary.warnings.extend(f"{file.original_name}: {warning}" for warning in warnings)
                 else:
                     file.status = FILE_STATUS_PARSED
                     file.error_message = None
                     summary.parsed_files += 1
             except Exception as exc:
-                message = getattr(exc, "message", str(exc))
+                message = _safe_parse_detail(getattr(exc, "message", str(exc)))
                 file.status = FILE_STATUS_FAILED
                 file.error_message = message
                 summary.failed_files += 1
                 summary.errors.append(f"{file.original_name}: {message}")
 
-            _mark_run_progress(db, run_id, index, len(files), file.original_name)
+            mark_progress(index, file.original_name)
             db.commit()
 
         db.commit()
@@ -210,7 +256,7 @@ def parse_task_files_for_endpoint(task_id: str) -> ParseSummary | None:
             task = db.get(Task, task_id)
             if task is not None:
                 task.status = TASK_STATUS_FAILED
-                task.last_error = str(exc)[:1000]
+                task.last_error = _safe_parse_detail(exc)
                 db.commit()
         raise
 

@@ -123,6 +123,18 @@ def _validate_completion_gate(db: Session, task: Task, current_user: User, force
     if isinstance(invalid_citations, list) and invalid_citations:
         raise AppError("INVALID_CITATIONS_PRESENT", "报告存在无效证据引用，无法完成任务", status.HTTP_409_CONFLICT)
 
+    uncited_sections = citation_check.get("uncited_sections")
+    try:
+        uncited_fact_count = int(citation_check.get("uncited_fact_count", 0))
+    except (TypeError, ValueError):
+        uncited_fact_count = 0
+    if uncited_fact_count > 0 or (isinstance(uncited_sections, list) and uncited_sections):
+        raise AppError(
+            "UNCITED_REPORT_FACTS_PRESENT",
+            "时间线或主要冲突存在无证据编号事实，无法完成任务",
+            status.HTTP_409_CONFLICT,
+        )
+
     try:
         coverage = float(citation_check.get("citation_coverage", 0))
     except (TypeError, ValueError):
