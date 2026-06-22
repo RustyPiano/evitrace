@@ -42,6 +42,20 @@ def test_detects_time_conflict_when_precise_times_differ_by_more_than_threshold(
     assert conflicts[0]["conflict_id"] == "C-001"
 
 
+def test_time_conflict_sides_use_time_field_citations():
+    left = _event("EVT-001", time_normalized="2026-06-01T14:00:00")
+    right = _event("EVT-002", time_normalized="2026-06-01T16:30:00")
+    left["time_citation"] = {"value": "14:00", "evidence_ids": ["E-0101"]}
+    right["time_citation"] = {"value": "16:30", "evidence_ids": ["E-0102"]}
+
+    conflicts, warnings = detect_conflicts([left, right], time_conflict_minutes=30)
+
+    assert warnings == []
+    assert conflicts[0]["type"] == "time"
+    assert conflicts[0]["left"]["evidence_ids"] == ["E-0101"]
+    assert conflicts[0]["right"]["evidence_ids"] == ["E-0102"]
+
+
 def test_does_not_detect_time_conflict_within_threshold():
     conflicts, _ = detect_conflicts(
         [
@@ -156,6 +170,19 @@ def test_detects_location_conflict_for_same_event_key():
     assert [conflict["type"] for conflict in conflicts] == ["location"]
 
 
+def test_location_conflict_sides_use_location_field_citations():
+    left = _event("EVT-001", location="地点 A")
+    right = _event("EVT-002", location="地点 B")
+    left["location_citation"] = {"value": "地点 A", "evidence_ids": ["E-0201"]}
+    right["location_citation"] = {"value": "地点 B", "evidence_ids": ["E-0202"]}
+
+    conflicts, _ = detect_conflicts([left, right])
+
+    assert conflicts[0]["type"] == "location"
+    assert conflicts[0]["left"]["evidence_ids"] == ["E-0201"]
+    assert conflicts[0]["right"]["evidence_ids"] == ["E-0202"]
+
+
 def test_does_not_detect_location_conflict_for_same_location_with_spacing():
     conflicts, _ = detect_conflicts(
         [
@@ -176,6 +203,31 @@ def test_detects_quantity_conflict_when_units_match_and_values_differ():
     )
 
     assert [conflict["type"] for conflict in conflicts] == ["quantity"]
+
+
+def test_quantity_conflict_sides_use_quantity_field_citations():
+    left = _event("EVT-001", quantity={"value": 3, "unit": "辆"})
+    right = _event("EVT-002", quantity={"value": 5, "unit": "辆"})
+    left["quantity_citation"] = {"value": "3辆", "evidence_ids": ["E-0301"]}
+    right["quantity_citation"] = {"value": "5辆", "evidence_ids": ["E-0302"]}
+
+    conflicts, _ = detect_conflicts([left, right])
+
+    assert conflicts[0]["type"] == "quantity"
+    assert conflicts[0]["left"]["evidence_ids"] == ["E-0301"]
+    assert conflicts[0]["right"]["evidence_ids"] == ["E-0302"]
+
+
+def test_conflict_sides_fall_back_to_event_evidence_without_field_citations():
+    conflicts, _ = detect_conflicts(
+        [
+            _event("EVT-001", quantity={"value": 3, "unit": "辆"}),
+            _event("EVT-002", quantity={"value": 5, "unit": "辆"}),
+        ]
+    )
+
+    assert conflicts[0]["left"]["evidence_ids"] == ["E-0001"]
+    assert conflicts[0]["right"]["evidence_ids"] == ["E-0002"]
 
 
 def test_does_not_compare_quantity_when_units_differ_and_records_warning():

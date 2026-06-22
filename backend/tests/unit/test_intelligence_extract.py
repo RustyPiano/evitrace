@@ -1,8 +1,13 @@
 import json
 
 from app.skills.base import SkillContext
-from app.skills.intelligence_extract import IntelligenceExtractSkill, _merge_extractions
-from app.schemas_analysis import Event, ExtractionResult
+from app.skills.intelligence_extract import (
+    IntelligenceExtractSkill,
+    _merge_extractions,
+    _sanitize_extraction,
+    build_timeline,
+)
+from app.schemas_analysis import Event, ExtractionResult, FieldCitation
 
 
 def _context(tmp_path, task_id: str = "task-1") -> SkillContext:
@@ -119,6 +124,47 @@ def test_task_fixture_can_resolve_match_to_display_id_and_ignore_extra_fields(tm
     assert "extra_field" not in result.data["events"][0]
 
 
+def test_sanitize_field_citations_filters_invalid_ids_and_falls_back_to_event_ids():
+    raw = {
+        "events": [
+            {
+                "event_key": "车队-发现-车辆",
+                "title": "发现车辆",
+                "time_text": "6月1日14:00",
+                "time_normalized": "2026-06-01T14:00:00",
+                "location": "地点A",
+                "quantity": {"value": 3, "unit": "辆"},
+                "evidence_ids": ["E-0001", "E-0002"],
+                "time_citation": {
+                    "value": "6月1日14:00",
+                    "evidence_ids": ["E-0002", "E-9999", "E-0002"],
+                },
+                "location_citation": {"value": "地点A", "evidence_ids": ["E-9999"]},
+                "quantity_citation": None,
+            },
+            {
+                "event_key": "车队-发现-车辆",
+                "title": "发现车辆",
+                "location": None,
+                "quantity": None,
+                "evidence_ids": ["E-0001"],
+                "location_citation": {"value": "地点A", "evidence_ids": ["E-0001"]},
+                "quantity_citation": {"value": "3辆", "evidence_ids": ["E-0001"]},
+            },
+        ]
+    }
+
+    extraction, warnings = _sanitize_extraction(raw, _evidence())
+
+    assert warnings == []
+    event = extraction.events[0]
+    assert event.time_citation == FieldCitation(value="6月1日14:00", evidence_ids=["E-0002"])
+    assert event.location_citation == FieldCitation(value="地点A", evidence_ids=["E-0001", "E-0002"])
+    assert event.quantity_citation == FieldCitation(value="3 辆", evidence_ids=["E-0001", "E-0002"])
+    assert extraction.events[1].location_citation is None
+    assert extraction.events[1].quantity_citation is None
+
+
 def test_sanitize_invalid_time_normalized_keeps_time_text_and_warns(tmp_path):
     task_id = "task-invalid-time"
     fixture_dir = tmp_path / "tasks" / task_id / "mock"
@@ -206,6 +252,10 @@ def test_real_extraction_prompt_includes_schema_example_and_empty_warning(monkey
     assert '"events"' in system_prompt
     assert '"event_key"' in system_prompt
     assert '"quantity": {"value": 3, "unit": "辆"}' in system_prompt
+    assert '"time_citation": {"value": "14:00", "evidence_ids": ["E-0003"]}' in system_prompt
+    assert '"location_citation"' in system_prompt
+    assert '"quantity_citation"' in system_prompt
+    assert "直接支持该字段" in system_prompt
     assert "同一真实事件" in system_prompt
     assert "必须取自输入证据中的 [E-xxxx] 编号" in system_prompt
     assert "只输出 JSON" in system_prompt
@@ -222,6 +272,7 @@ def test_merge_extractions_combines_evidence_ids_for_same_fact():
                 time_normalized="2026-06-01T14:00:00",
                 location="地点A",
                 evidence_ids=["E-0001"],
+                time_citation=FieldCitation(value="14:00", evidence_ids=["E-0001"]),
             )
         ]
     )
@@ -233,6 +284,7 @@ def test_merge_extractions_combines_evidence_ids_for_same_fact():
                 time_normalized="2026-06-01T14:00:00",
                 location="地点A",
                 evidence_ids=["E-0002", "E-0001"],
+                time_citation=FieldCitation(value="14:00", evidence_ids=["E-0002", "E-0001"]),
             )
         ]
     )
@@ -242,3 +294,26 @@ def test_merge_extractions_combines_evidence_ids_for_same_fact():
     assert len(merged.events) == 1
     assert merged.events[0].event_id == "EVT-001"
     assert merged.events[0].evidence_ids == ["E-0001", "E-0002"]
+    assert merged.events[0].time_citation == FieldCitation(
+        value="14:00",
+        evidence_ids=["E-0001", "E-0002"],
+    )
+
+
+def test_build_timeline_carries_time_field_evidence_ids():
+    timeline = build_timeline(
+        [
+            Event(
+                event_id="EVT-001",
+                event_key="车队-发现-车辆",
+                title="发现车辆",
+                time_text="14:00",
+                time_normalized="2026-06-01T14:00:00",
+                evidence_ids=["E-0001"],
+                time_citation=FieldCitation(value="14:00", evidence_ids=["E-0002"]),
+            )
+        ]
+    )
+
+    assert timeline[0].evidence_ids == ["E-0001"]
+    assert timeline[0].time_evidence_ids == ["E-0002"]

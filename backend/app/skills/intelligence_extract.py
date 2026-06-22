@@ -6,7 +6,7 @@ from typing import Any
 from datetime import date, datetime, time, timezone
 
 from app.config import settings
-from app.schemas_analysis import Entity, Event, ExtractionResult, TimelineItem
+from app.schemas_analysis import Entity, Event, ExtractionResult, FieldCitation, Quantity, TimelineItem
 from app.services.llm_client import LocalLLMClient
 from app.utils.time_normalize import ParsedTime, parse_time_value
 
@@ -104,6 +104,45 @@ def _valid_evidence_ids(raw: dict[str, Any], evidence_by_id: dict[str, dict[str,
     return valid
 
 
+def _quantity_text(quantity: dict[str, Any] | Quantity | None) -> str | None:
+    if quantity is None:
+        return None
+    if isinstance(quantity, Quantity):
+        return f"{quantity.value:g} {quantity.unit}"
+    if not isinstance(quantity, dict):
+        return None
+    unit = str(quantity.get("unit") or "").strip()
+    if not unit:
+        return None
+    try:
+        value = float(quantity.get("value"))
+    except (TypeError, ValueError):
+        return None
+    return f"{value:g} {unit}"
+
+
+def _sanitize_field_citation(
+    raw_event: dict[str, Any],
+    field_name: str,
+    fallback_value: str | None,
+    fallback_evidence_ids: list[str],
+    evidence_by_id: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    if not fallback_value:
+        return None
+    raw_citation = raw_event.get(field_name)
+    if isinstance(raw_citation, dict):
+        evidence_ids = _valid_evidence_ids(raw_citation, evidence_by_id)
+        value = str(raw_citation.get("value") or fallback_value).strip() or fallback_value
+    else:
+        evidence_ids = []
+        value = fallback_value
+    return {
+        "value": value,
+        "evidence_ids": evidence_ids or list(fallback_evidence_ids),
+    }
+
+
 def _default_mock_raw(evidence_items: list[dict[str, Any]]) -> dict[str, Any]:
     first = evidence_items[0]["display_id"]
     second = evidence_items[1]["display_id"] if len(evidence_items) > 1 else first
@@ -126,6 +165,9 @@ def _default_mock_raw(evidence_items: list[dict[str, Any]]) -> dict[str, Any]:
                 "time_normalized": "2026-06-01T14:00:00",
                 "location": "地点A",
                 "quantity": {"value": 3, "unit": "辆"},
+                "time_citation": {"value": "2026-06-01 14:00", "evidence_ids": [first]},
+                "location_citation": {"value": "地点A", "evidence_ids": [first]},
+                "quantity_citation": {"value": "3 辆", "evidence_ids": [first]},
                 "evidence_ids": [first],
                 "confidence": 0.82,
             },
@@ -139,6 +181,9 @@ def _default_mock_raw(evidence_items: list[dict[str, Any]]) -> dict[str, Any]:
                 "time_normalized": "2026-06-01T16:30:00",
                 "location": "地点B",
                 "quantity": {"value": 5, "unit": "辆"},
+                "time_citation": {"value": "2026-06-01 16:30", "evidence_ids": [second]},
+                "location_citation": {"value": "地点B", "evidence_ids": [second]},
+                "quantity_citation": {"value": "5 辆", "evidence_ids": [second]},
                 "evidence_ids": [second],
                 "confidence": 0.82,
             },
@@ -175,6 +220,27 @@ def _sanitize_extraction(raw: dict[str, Any], evidence_items: list[dict[str, Any
         if normalized.get("time_normalized") and parse_time_value(str(normalized["time_normalized"])) is None:
             normalized["time_normalized"] = None
             warnings.append("事件时间规范化值不可解析，已置为未确定")
+        normalized["time_citation"] = _sanitize_field_citation(
+            raw_event,
+            "time_citation",
+            str(normalized.get("time_text") or normalized.get("time_normalized") or "").strip() or None,
+            normalized["evidence_ids"],
+            evidence_by_id,
+        )
+        normalized["location_citation"] = _sanitize_field_citation(
+            raw_event,
+            "location_citation",
+            str(normalized.get("location") or "").strip() or None,
+            normalized["evidence_ids"],
+            evidence_by_id,
+        )
+        normalized["quantity_citation"] = _sanitize_field_citation(
+            raw_event,
+            "quantity_citation",
+            _quantity_text(normalized.get("quantity")),
+            normalized["evidence_ids"],
+            evidence_by_id,
+        )
         normalized.pop("event_id", None)
         try:
             events.append(Event.model_validate(normalized))
@@ -210,6 +276,17 @@ def _merge_extractions(extractions: list[ExtractionResult]) -> ExtractionResult:
                 for evidence_id in event.evidence_ids:
                     if evidence_id not in existing.evidence_ids:
                         existing.evidence_ids.append(evidence_id)
+                for citation_name in ("time_citation", "location_citation", "quantity_citation"):
+                    existing_citation = getattr(existing, citation_name)
+                    event_citation = getattr(event, citation_name)
+                    if event_citation is None:
+                        continue
+                    if existing_citation is None:
+                        setattr(existing, citation_name, event_citation)
+                        continue
+                    for evidence_id in event_citation.evidence_ids:
+                        if evidence_id not in existing_citation.evidence_ids:
+                            existing_citation.evidence_ids.append(evidence_id)
                 continue
             event.event_id = f"EVT-{len(events) + 1:03d}"
             event_by_key[key] = event
@@ -250,6 +327,7 @@ def build_timeline(events: list[Event]) -> list[TimelineItem]:
                 time_normalized=event.time_normalized,
                 time_group=event.time_normalized or "时间未确定",
                 location=event.location,
+                time_evidence_ids=event.time_citation.evidence_ids if event.time_citation else [],
                 evidence_ids=event.evidence_ids,
             )
         )
@@ -318,6 +396,7 @@ class IntelligenceExtractSkill:
             "你是情报资料要素提取器。只使用输入证据抽取实体和事件，不输出行动建议。"
             "无法确定的字段填 null，不要编造。evidence_ids 必须取自输入证据中的 [E-xxxx] 编号。"
             "同一真实事件在不同证据中出现时，必须使用相同的 event_key，便于后续规则引擎比对时间、地点、数量冲突。"
+            "每个事实字段尽量给出直接支持该字段的证据编号；不确定则省略，系统将回退到事件级 evidence_ids。"
             "Entity.type 只能取 person、organization、location、event、object、time、quantity；"
             "confidence 填 0 到 1 或 null；Event.evidence_ids 至少包含一个有效证据编号。"
             "只输出 JSON，不要 Markdown、代码围栏或解释。\n\n"
@@ -337,6 +416,9 @@ class IntelligenceExtractSkill:
             '      "time_normalized": "ISO8601 如 2026-06-01T14:00:00|null",\n'
             '      "location": "str|null",\n'
             '      "quantity": {"value": 3, "unit": "辆"} 或 null,\n'
+            '      "time_citation": {"value": "14:00", "evidence_ids": ["E-0003"]} 或 null,\n'
+            '      "location_citation": {"value": "A镇", "evidence_ids": ["E-0001"]} 或 null,\n'
+            '      "quantity_citation": {"value": "3辆", "evidence_ids": ["E-0001"]} 或 null,\n'
             '      "evidence_ids": ["E-0001"],\n'
             '      "confidence": 0.0\n'
             "    }\n"
@@ -359,6 +441,9 @@ class IntelligenceExtractSkill:
             '      "time_normalized": "2026-06-01T14:00:00",\n'
             '      "location": "A镇",\n'
             '      "quantity": {"value": 3, "unit": "辆"},\n'
+            '      "time_citation": {"value": "6月1日14时", "evidence_ids": ["E-0001"]},\n'
+            '      "location_citation": {"value": "A镇", "evidence_ids": ["E-0001"]},\n'
+            '      "quantity_citation": {"value": "3辆", "evidence_ids": ["E-0001"]},\n'
             '      "evidence_ids": ["E-0001"],\n'
             '      "confidence": 0.84\n'
             "    },\n"
@@ -372,6 +457,9 @@ class IntelligenceExtractSkill:
             '      "time_normalized": "2026-06-01T14:00:00",\n'
             '      "location": "A镇",\n'
             '      "quantity": {"value": 5, "unit": "辆"},\n'
+            '      "time_citation": {"value": "6月1日下午2点", "evidence_ids": ["E-0002"]},\n'
+            '      "location_citation": {"value": "A镇", "evidence_ids": ["E-0002"]},\n'
+            '      "quantity_citation": {"value": "5辆", "evidence_ids": ["E-0002"]},\n'
             '      "evidence_ids": ["E-0002"],\n'
             '      "confidence": 0.8\n'
             "    }\n"

@@ -46,12 +46,31 @@ def _with_refs(text: str, refs: str) -> str:
     return f"{text} {refs}" if refs else text
 
 
+def _time_evidence_ids(item: dict[str, Any], events_by_id: dict[str, dict[str, Any]]) -> list[Any]:
+    item_time_ids = list(item.get("time_evidence_ids") or [])
+    if item_time_ids:
+        return item_time_ids
+    event = events_by_id.get(str(item.get("event_id") or ""))
+    if isinstance(event, dict):
+        citation = event.get("time_citation")
+        if isinstance(citation, dict):
+            event_time_ids = list(citation.get("evidence_ids") or [])
+            if event_time_ids:
+                return event_time_ids
+    return list(item.get("evidence_ids") or [])
+
+
 def _timeline_lines(payload: dict[str, Any]) -> list[str]:
     evidence = list(payload.get("evidence") or [])
     primary_ref = _first_ids(evidence, 1)
+    events_by_id = {
+        str(event.get("event_id")): event
+        for event in list(payload.get("events") or [])
+        if isinstance(event, dict) and event.get("event_id")
+    }
     lines = []
     for item in list(payload.get("timeline") or []):
-        refs = _format_refs(list(item.get("evidence_ids") or []))
+        refs = _format_refs(_time_evidence_ids(item, events_by_id))
         time_text = item.get("time_normalized") or item.get("time_text") or "时间未确定"
         title = item.get("title") or item.get("event_key") or "未命名事件"
         lines.append(_with_refs(f"- {time_text}：{title}", refs))

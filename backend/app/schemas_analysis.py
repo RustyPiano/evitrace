@@ -39,6 +39,19 @@ class Quantity(AnalysisBaseModel):
         return value.strip()
 
 
+class FieldCitation(AnalysisBaseModel):
+    value: str | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("value")
+    @classmethod
+    def trim_value(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+
 class Event(AnalysisBaseModel):
     event_id: str | None = None
     event_key: str = Field(min_length=1)
@@ -50,6 +63,9 @@ class Event(AnalysisBaseModel):
     time_normalized: str | None = None
     location: str | None = None
     quantity: Quantity | None = None
+    time_citation: FieldCitation | None = None
+    location_citation: FieldCitation | None = None
+    quantity_citation: FieldCitation | None = None
     evidence_ids: list[str] = Field(min_length=1)
     confidence: float | None = Field(default=None, ge=0, le=1)
 
@@ -85,6 +101,7 @@ class TimelineItem(AnalysisBaseModel):
     time_normalized: str | None = None
     time_group: str
     location: str | None = None
+    time_evidence_ids: list[str] = Field(default_factory=list)
     evidence_ids: list[str] = Field(min_length=1)
 
 

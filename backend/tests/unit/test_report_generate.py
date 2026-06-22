@@ -1,5 +1,5 @@
 from app.skills.base import SkillContext
-from app.skills.report_generate import REPORT_NOTICE, ReportGenerateSkill
+from app.skills.report_generate import REPORT_NOTICE, ReportGenerateSkill, _timeline_lines
 
 
 FIXED_HEADINGS = [
@@ -194,3 +194,40 @@ def test_real_report_replaces_model_timeline_and_conflicts_with_structured_cited
     assert "- 2026-06-01T14:00:00：车队到达地点A [E-0001]" in markdown
     assert "- C-001：同一车队出现时间冲突 [E-0001]" in markdown
     assert result.data["citation_check"]["uncited_fact_count"] == 0
+
+
+def test_timeline_lines_prefer_time_field_evidence_ids():
+    lines = _timeline_lines(
+        {
+            "timeline": [
+                {
+                    "event_id": "EV-001",
+                    "event_key": "convoy",
+                    "title": "车队到达地点A",
+                    "time_normalized": "2026-06-01T14:00:00",
+                    "evidence_ids": ["E-0001"],
+                    "time_evidence_ids": ["E-0002"],
+                }
+            ]
+        }
+    )
+
+    assert lines == ["- 2026-06-01T14:00:00：车队到达地点A [E-0002]"]
+
+
+def test_timeline_lines_fall_back_to_event_evidence_ids():
+    lines = _timeline_lines(
+        {
+            "timeline": [
+                {
+                    "event_id": "EV-001",
+                    "event_key": "convoy",
+                    "title": "车队到达地点A",
+                    "time_normalized": "2026-06-01T14:00:00",
+                    "evidence_ids": ["E-0001"],
+                }
+            ]
+        }
+    )
+
+    assert lines == ["- 2026-06-01T14:00:00：车队到达地点A [E-0001]"]

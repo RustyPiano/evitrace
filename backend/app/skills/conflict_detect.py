@@ -59,11 +59,26 @@ def _group_event_key(group: list[dict[str, Any]]) -> str:
     return ""
 
 
-def _event_side(event: dict[str, Any], value: str) -> dict[str, Any]:
+def _field_evidence_ids(event: dict[str, Any], conflict_type: str) -> list[str]:
+    citation_key = {
+        "time": "time_citation",
+        "location": "location_citation",
+        "quantity": "quantity_citation",
+    }.get(conflict_type)
+    if citation_key:
+        citation = event.get(citation_key)
+        if isinstance(citation, dict):
+            evidence_ids = [str(value) for value in citation.get("evidence_ids") or [] if value]
+            if evidence_ids:
+                return evidence_ids
+    return [str(value) for value in event.get("evidence_ids") or [] if value]
+
+
+def _event_side(event: dict[str, Any], value: str, conflict_type: str) -> dict[str, Any]:
     return {
         "value": value,
         "event_id": event["event_id"],
-        "evidence_ids": event["evidence_ids"],
+        "evidence_ids": _field_evidence_ids(event, conflict_type),
     }
 
 
@@ -83,8 +98,8 @@ def _add_conflict(
         type=conflict_type,
         event_key=event_key,
         description=description,
-        left=_event_side(left_event, left_value),
-        right=_event_side(right_event, right_value),
+        left=_event_side(left_event, left_value, conflict_type),
+        right=_event_side(right_event, right_value, conflict_type),
         status=CONFLICT_STATUS_UNREVIEWED,
     )
     conflicts.append(conflict.model_dump(mode="json"))

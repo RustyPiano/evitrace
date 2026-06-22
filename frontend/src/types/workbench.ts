@@ -55,6 +55,16 @@ export interface AnalysisEntity {
   evidence_ids?: string[];
 }
 
+export interface FieldCitation {
+  value?: string | null;
+  evidence_ids: string[];
+}
+
+export interface AnalysisQuantity {
+  value: number;
+  unit: string;
+}
+
 export interface AnalysisEvent {
   event_id: string;
   event_key?: string;
@@ -62,6 +72,10 @@ export interface AnalysisEvent {
   time_text?: string | null;
   time_normalized: string | null;
   location: string | null;
+  quantity?: AnalysisQuantity | null;
+  time_citation?: FieldCitation | null;
+  location_citation?: FieldCitation | null;
+  quantity_citation?: FieldCitation | null;
   evidence_ids: string[];
   confidence?: number | null;
 }
@@ -74,6 +88,7 @@ export interface TimelineItem {
   time_normalized: string | null;
   time_group?: string;
   location: string | null;
+  time_evidence_ids?: string[];
   evidence_ids: string[];
   confidence?: number | null;
 }
