@@ -2,6 +2,26 @@
 
 EviTrace（证链）是一个离线优先的多模态情报分析工作台，用证据卡片、结构化事件、冲突检测和带引用报告，把 TXT/PDF、图片、音频、视频材料串成可复核的分析链路。
 
+## 🚀 30 秒快速上手（演示模式）
+
+前置：已安装 Docker。
+
+```bash
+docker compose up -d --build
+```
+
+然后按这条路径完成一次演示：
+
+1. 打开 `http://localhost:8080`。
+2. 使用演示账号登录：`admin` / `admin123456`。
+3. 新建任务。
+4. 上传演示样例：任选 `demo_data/case_01_time_conflict/`、`demo_data/case_02_location_conflict/` 或 `demo_data/case_03_quantity_conflict/` 中的 `brief.txt`、`report.pdf`、`image.png`、`audio.wav`、`video.mp4`。
+5. 点「开始分析」。
+6. 查看时间线、冲突、证据卡片。
+7. 下载 Markdown 报告。
+
+默认 `MOCK_AI=true` 是**演示 Fixture 模式**，不会连接真实云模型或外部 OCR/ASR 服务；页面顶部徽章会显示当前运行模式（演示/真实/混合）。
+
 ## 架构
 
 ```text
@@ -23,337 +43,72 @@ SQLite + uploads + derived frames + reports
   ./data  <->  /app/data
 ```
 
-Data flow:
-
 ```text
 upload files -> validate type/path -> store originals -> parse to evidence
   -> extract entities/events -> detect time/location/quantity conflicts
   -> generate cited Markdown report -> human review/download
 ```
 
-## Screenshots
+默认端口：
 
-截图占位目录：`docs/screenshots/`。课程汇报截图建议放入该目录，并在文件名中标明页面，例如 `login.png`、`workbench-conflicts.png`、`report-citations.png`。
+- 前端：`http://localhost:8080`
+- 后端：`http://localhost:8000`
+- 反向代理健康检查：`http://localhost:8080/api/v1/health`
 
-## Requirements
+## 运行模式
 
-- Docker Compose for the zero-config demo deployment.
-- Python 3.11 for local backend development and tests.
-- Node.js 20+ for local frontend development and builds.
-- ffmpeg is required to (re)generate demo `video.mp4` files, for real video parsing, and for real VLM descriptions of video key frames.
-- Optional real OCR/ASR dependencies are in `backend/requirements-optional.txt`; they are not installed in the Docker demo image.
+- **演示 Fixture 模式**：默认 `MOCK_AI=true`。OCR/ASR/视频解析、视觉描述、要素抽取使用确定性 fixture；冲突检测和报告生成仍走真实后端链路，适合课程演示和离线评审。
+- **真实模式**：`MOCK_AI=false`，并配置真实 LLM/VLM/OCR/ASR 后使用模型或本机服务。
+- **混合模式**：例如云端 LLM/VLM 为真实，OCR/ASR 仍用 fixture。适合没有本机 OCR/ASR 权重时验证报告链路。
 
-Default `MOCK_AI=true` mode runs without LLM, OCR, ASR, or model weights.
+云端 LLM / VLM、本机 OCR-ASR、全真实模式、Docker 安全配置、本地裸跑后端端口 `8088` 提醒等部署细节见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
 
-## Local Model Preparation
+## 演示与评估
 
-Fully local real AI mode is offline-first and expects you to prepare local services and weights yourself:
-
-- OpenAI-compatible local LLM endpoint:
-  - `LOCAL_LLM_BASE_URL`, for example `http://host.docker.internal:11434/v1`
-  - `LOCAL_LLM_API_KEY`
-  - `LOCAL_LLM_MODEL`
-- OpenAI-compatible visual model endpoint for image and video key-frame descriptions:
-  - `VLM_BASE_URL`
-  - `VLM_API_KEY`
-  - `VLM_MODEL`, for example an image-capable Qwen-VL or GLM-4V model
-- OCR:
-  - Preferred: `OCR_BASE_URL`, for example `http://127.0.0.1:8000` on the host or `http://host.docker.internal:8000` from Docker
-  - Fallback: `OCR_MODEL_DIR` containing local PaddleOCR `det/` and `rec/` directories, optional `cls/`
-- ASR:
-  - Preferred: `ASR_BASE_URL`, for example `http://127.0.0.1:8001` on the host or `http://host.docker.internal:8001` from Docker
-  - Fallback: `ASR_MODEL_DIR`
-  - `ASR_MODEL_SIZE`, default `small`
-- Media HTTP timeout:
-  - `MEDIA_TIMEOUT_SEC`, default `180`, used for OCR/ASR HTTP inference calls and health probes
-- Video parsing:
-  - `ffmpeg` must be available in the runtime environment
-
-The text LLM and visual VLM are separate endpoints. A text-only endpoint such as DeepSeek can be used for extraction/reporting, but visual understanding requires a model that accepts image inputs. The application does not download model weights at runtime. For fully local real mode, keep `MOCK_AI=true` until those local dependencies are installed and verified.
-
-In real media mode (`MOCK_MEDIA=false`, or `MOCK_AI=false` with empty `MOCK_MEDIA`), OCR and ASR prefer HTTP services when `OCR_BASE_URL` or `ASR_BASE_URL` is set. If a URL is empty, the backend falls back to the in-process PaddleOCR or faster-whisper path and requires the local model directory. `MOCK_MEDIA=true` always uses deterministic media fixtures and does not call HTTP services or in-process OCR/ASR libraries.
-
-Visual understanding is controlled separately from local OCR/ASR. Leave `MOCK_VISION` empty for auto mode: if `VLM_BASE_URL`, `VLM_API_KEY`, and `VLM_MODEL` are all set, image and video visual descriptions use the real VLM; otherwise they use caption fixtures. This is independent of `MOCK_MEDIA`, so local OCR/ASR can stay mocked while cloud VLM is real.
-
-## 使用云端 OpenAI 兼容模型（无本地模型时）
-
-如果只有云端 OpenAI 兼容 LLM/VLM（例如 DeepSeek 文本端点 + SiliconFlow 视觉端点），但没有本地 PaddleOCR 或 faster-whisper，可以让文本 LLM 和视觉 VLM 走真实云端、OCR/ASR/视频解析继续走确定性 fixture。示例 `.env`：
-
-```env
-MOCK_AI=false
-MOCK_LLM=false
-MOCK_MEDIA=true
-MOCK_VISION=
-LOCAL_LLM_BASE_URL=https://api.deepseek.com/v1
-LOCAL_LLM_API_KEY=<put-your-key-in-private-.env-only>
-LOCAL_LLM_MODEL=deepseek-chat
-VLM_BASE_URL=https://api.siliconflow.cn/v1
-VLM_API_KEY=<put-your-vlm-key-in-private-.env-only>
-VLM_MODEL=Qwen/Qwen3.6-35B-A3B
-```
-
-此模式下，TXT/PDF 仍由本地解析流程真实提取文本证据，云端 LLM 负责要素事件抽取和报告生成；OCR、ASR、视频关键帧/音轨解析使用 fixture；视觉理解由完整的 `VLM_*` 配置自动切到真实 VLM。视频真实视觉会从原视频按 `VIDEO_FRAME_INTERVAL_SEC` 抽帧；如果 ffmpeg 不可用或 VLM 返回 403、超时、余额不足等错误，视觉理解会降级为 warning，不影响 OCR/ASR/文档解析和任务完成。
-
-VLM 与文本 LLM 是两个独立端点。DeepSeek 等文本模型端点不能替代视觉端点；SiliconFlow 等 VLM 端点需要账户有可用余额。API key 只放在已被 gitignore 的本机 `.env` 中，不要写入代码、README 示例以外的文件、测试 fixture、提交记录或终端输出。
-
-## 本机 HTTP OCR/ASR 服务
-
-如果本机已启动 OCR/ASR HTTP 微服务，真实媒体模式会优先调用这些服务，不再在后端进程内加载 PaddleOCR 或 faster-whisper：
-
-```env
-MOCK_AI=false
-MOCK_MEDIA=false
-OCR_BASE_URL=http://127.0.0.1:8000
-ASR_BASE_URL=http://127.0.0.1:8001
-MEDIA_TIMEOUT_SEC=180
-```
-
-Docker 中后端容器访问宿主机服务时使用：
-
-```env
-OCR_BASE_URL=http://host.docker.internal:8000
-ASR_BASE_URL=http://host.docker.internal:8001
-```
-
-适配服务的 `GET /health` 需返回 JSON：`{"status":"ok","warmed":true}` 或 `{"status":"ok","warmed":false}`。后端健康检查以 `status == "ok"` 判定 OCR/ASR HTTP 服务可用，并读取 `warmed` 作为布尔预热状态。
-
-全真实模式示例：
-
-```env
-MOCK_AI=false
-MOCK_MEDIA=false
-OCR_BASE_URL=http://127.0.0.1:8000
-ASR_BASE_URL=http://127.0.0.1:8001
-LOCAL_LLM_BASE_URL=https://api.deepseek.com/v1
-LOCAL_LLM_API_KEY=<put-your-key-in-private-.env-only>
-LOCAL_LLM_MODEL=deepseek-chat
-VLM_BASE_URL=https://api.siliconflow.cn/v1
-VLM_API_KEY=<put-your-vlm-key-in-private-.env-only>
-VLM_MODEL=Qwen/Qwen3.6-35B-A3B
-```
-
-本机 OCR 服务占用 `8000`，会与后端默认开发端口冲突。本地裸跑后端时请换端口，例如：
-
-```bash
-cd backend
-uvicorn app.main:app --reload --port 8088
-```
-
-## Docker Startup
-
-Zero-config MOCK demo:
-
-```bash
-docker compose up --build -d
-docker compose ps
-```
-
-Open:
-
-- Frontend: `http://localhost:8080`
-- Backend health: `http://localhost:8000/api/v1/health`
-- Through nginx: `http://localhost:8080/api/v1/health`
-
-Without a `.env`, Docker defaults to:
-
-- `ENV=production`
-- `MOCK_AI=true`
-- `DATA_ROOT=/app/data`
-- `DATABASE_URL=sqlite:////app/data/app.db`
-- `FIRST_ADMIN_USERNAME=admin`
-- `FIRST_ADMIN_PASSWORD=EviTrace-Demo-Admin-2026!`
-
-Data persists in `./data`, including SQLite DB, uploads, derived frames, reports, and the auto-generated Docker secret file.
-
-The provided backend Docker image is for `MOCK_AI=true` demos and HTTP-adapter experiments. It installs core API dependencies only; it does not install system `ffmpeg`, `backend/requirements-optional.txt`, PaddleOCR, faster-whisper, or model weights. OCR/ASR can still be real if `OCR_BASE_URL` and `ASR_BASE_URL` point at host HTTP services. Real video parsing still requires `ffmpeg` in the backend runtime. The compose healthcheck is an API liveness check and does not prove real OCR/ASR/video/LLM readiness.
-
-Compose automatically reads a local `.env` if present. That lets you override passwords, model settings, CORS, timeouts, and `MOCK_AI`. For a hardened Docker demo using the provided image, set at least:
-
-```env
-ENV=production
-SECRET_KEY=<strong random value>
-FIRST_ADMIN_USERNAME=<admin username>
-FIRST_ADMIN_PASSWORD=<strong non-default password>
-```
-
-Keep `MOCK_AI=true` with the provided image for the zero-config demo. Set `MOCK_AI=false` in Docker only after either configuring `OCR_BASE_URL`/`ASR_BASE_URL` to host HTTP services or extending the backend image with optional OCR/ASR dependencies and mounted model directories. For real video parsing, also add system `ffmpeg`. Point `LOCAL_LLM_*` to an OpenAI-compatible model service before enabling real LLM extraction/reporting.
-
-If `SECRET_KEY` is empty, `change-me`, or shorter than 32 bytes, the backend Docker entrypoint generates a strong key at `./data/.secret_key` and reuses it on restart. Setting a strong `SECRET_KEY` in `.env` takes precedence.
-
-Stop containers:
-
-```bash
-docker compose down
-```
-
-Reset all local Docker demo data:
-
-```bash
-docker compose down -v
-rm -rf data
-mkdir -p data
-```
-
-## Development Startup
-
-Create local development config:
-
-```bash
-cp .env.example .env
-python - <<'PY'
-from pathlib import Path
-import secrets
-
-path = Path(".env")
-text = path.read_text()
-text = text.replace("SECRET_KEY=change-me", f"SECRET_KEY={secrets.token_urlsafe(48)}")
-path.write_text(text)
-PY
-```
-
-Backend:
-
-```bash
-cd backend
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt -r requirements-dev.txt
-uvicorn app.main:app --reload
-```
-
-Reset the first admin password from the project root:
-
-```bash
-backend/.venv/bin/python scripts/seed_admin.py
-```
-
-Frontend:
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Development URLs:
-
-- Frontend: `http://localhost:5173`
-- Backend: `http://localhost:8000`
-
-For local real OCR/ASR over HTTP:
-
-```bash
-cd backend
-source .venv/bin/activate
-MOCK_AI=false MOCK_MEDIA=false \
-OCR_BASE_URL=http://127.0.0.1:8000 \
-ASR_BASE_URL=http://127.0.0.1:8001 \
-uvicorn app.main:app --reload --port 8088
-```
-
-For the older in-process OCR/ASR fallback, leave `OCR_BASE_URL` and `ASR_BASE_URL` empty and install optional dependencies:
-
-```bash
-cd backend
-source .venv/bin/activate
-pip install -r requirements-optional.txt
-MOCK_AI=false uvicorn app.main:app --reload
-```
-
-Ensure `ffmpeg` is installed on the host and available on `PATH` before running local real video parsing.
-
-## Admin And Security
-
-Docker demo with no `.env` uses `admin / EviTrace-Demo-Admin-2026!`.
-
-The development `.env.example` uses `admin / admin123456` and `SECRET_KEY=change-me` only as local placeholders. In `ENV=production`, the backend rejects the default admin password and weak secrets unless Docker entrypoint generation replaces the weak secret before app startup.
-
-Before any real deployment, change:
-
-- `SECRET_KEY`
-- `FIRST_ADMIN_USERNAME`
-- `FIRST_ADMIN_PASSWORD`
-- `CORS_ORIGINS`
-- local model endpoint and model directory settings
-
-Do not commit `.env`, model weights, uploads, reports, or generated secrets.
-
-## MOCK_AI Mode
-
-`MOCK_AI=true` is the default demo path. It keeps the whole API and UI workflow active while using deterministic fixtures unless a complete `VLM_*` configuration makes visual understanding real:
-
-- OCR/ASR/video parsing reads sidecar fixture JSON when available.
-- Visual understanding reads `*.caption.json` sidecar fixtures when `MOCK_VISION=true` or VLM is not configured; with complete `VLM_*` and empty `MOCK_VISION`, it calls the real VLM even if `MOCK_MEDIA=true`.
-- Entity and event extraction reads `mock/extraction.json` when available.
-- Conflict detection and report generation run locally and deterministically.
-- No public network or cloud model is required.
-
-Set `MOCK_AI=false` for real LLM extraction/reporting. Set `MOCK_MEDIA=true` when local OCR/ASR are unavailable. Set `VLM_*` when visual understanding should call a real model, or set `MOCK_VISION=true` to force visual fixtures.
-
-## Demo Flow
-
-Generate demo data if the directory is missing or stale:
+如需重新生成演示数据：
 
 ```bash
 python scripts/build_demo_data.py
 ```
 
-This command requires `ffmpeg` because it regenerates the demo `video.mp4` files.
+该命令需要本机 `ffmpeg`，因为会重生成演示 `video.mp4`。
 
-Run the automated three-case evaluation:
-
-```bash
-cd backend
-source .venv/bin/activate
-cd ..
-python scripts/evaluate_demo.py
-```
-
-The script writes `evaluation_result.md`.
-
-These metrics are deterministic pipeline validation metrics: workflow completion, planted-conflict recall, and citation-format coverage on the fixture-backed validation set. They are not real multimodal model recognition accuracy. Real-model behavior should be checked through qualitative end-to-end runs and the A/B scaffold below.
-
-Run the A/B comparison scaffold:
+运行三组 fixture 评估：
 
 ```bash
-cd backend
-source .venv/bin/activate
-cd ..
-python scripts/evaluate_ab.py
+./backend/.venv/bin/python scripts/evaluate_demo.py
 ```
 
-In the default mock mode, the script runs only the B arm and writes `scripts/ab_result.md` with A-arm columns marked N/A. To run the A arm while keeping media fixtures deterministic, start it with a real OpenAI-compatible LLM configuration, for example `MOCK_LLM=false MOCK_MEDIA=true MOCK_VISION=true LOCAL_LLM_BASE_URL=... LOCAL_LLM_API_KEY=... LOCAL_LLM_MODEL=... python scripts/evaluate_ab.py`. The A arm uses one direct `LocalLLMClient` text call per case and does not fabricate results when the LLM is mocked.
+运行 A/B 对比脚手架：
 
-Workbench demo checklist:
+```bash
+./backend/.venv/bin/python scripts/evaluate_ab.py
+```
 
-1. Log in as admin.
-2. Open user and Skill administration.
-3. Create or switch to an analyst.
-4. Create task `多源事件研判演示`.
-5. Upload TXT/PDF, image, audio, and video files from one `demo_data/case_*` directory.
-6. Start analysis.
-7. Watch the execution plan and progress.
-8. Open the timeline tab.
-9. Click event evidence and inspect PDF page, media timestamp, or frame locator.
-10. Open conflicts and review time, location, and quantity conflicts.
-11. Mark one conflict as confirmed.
-12. Open the report and click an `[E-xxxx]` citation.
-13. Check citation coverage and invalid citation count.
-14. Download the Markdown report.
-15. Show that another analyst cannot access the task.
-16. Show Docker and offline model configuration.
-17. Show the three-case evaluation table.
+默认 mock 模式只运行 B 组证据链流程，并把 A 组列标记为 N/A。若要启用 A 组真实 LLM，对应环境变量配置见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
 
-## Test Commands
+评估结果文件：
 
-Backend tests:
+- `evaluation_result.md`
+- `scripts/ab_result.md`
+
+## 测试命令
+
+后端：
 
 ```bash
 cd backend
 ./.venv/bin/pytest -q
 ```
 
-Frontend type-check and production build:
+注解命名检查：
+
+```bash
+cd backend
+./.venv/bin/python scripts/check_annotation_names.py
+```
+
+前端：
 
 ```bash
 cd frontend
@@ -361,38 +116,21 @@ npm run type-check
 npm run build
 ```
 
-Docker production demo:
+## 文档
 
-```bash
-docker compose down -v
-docker compose up --build -d
-docker compose ps
-```
+- [实验报告.md](实验报告.md)
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+- 截图占位目录：[docs/screenshots/](docs/screenshots/)
 
-Python 3.11 import check inside the backend image:
+课程汇报截图建议放入 `docs/screenshots/`，并在文件名中标明页面，例如 `login.png`、`workbench-conflicts.png`、`report-citations.png`。截图由人工补充，不属于自动测试范围。
 
-```bash
-docker compose exec backend python -c "import app.main"
-```
+## 安全边界
 
-Evaluation:
-
-```bash
-python scripts/evaluate_demo.py
-python scripts/evaluate_ab.py
-```
-
-## Known Limits
-
-This MVP intentionally does not include real-time stream ingestion, vector database retrieval, complex knowledge graphs, face recognition, geospatial map layers, multi-Agent free planning, distributed job queues, or fine-grained tenant isolation. Visual understanding describes sampled images and video key frames; it is not temporal action recognition, object tracking, or identity recognition. Real OCR/ASR/LLM/VLM quality depends on locally supplied models and is outside the Docker MOCK demo image.
-
-## Security Boundary
-
-- Offline by default: the app does not need public network access in `MOCK_AI=true`.
-- Frontend assets are bundled locally; no CDN is loaded.
-- Uploads enforce extension, MIME/signature checks, size limits, path safety, and task permission checks.
-- Download and streaming APIs require authentication and task access.
-- Admin operations are audit logged.
-- AI output is assistive only and must be reviewed by a human.
-- Reports must cite evidence IDs; invalid citations are tracked and surfaced.
-- Do not use real classified or sensitive data for tests, demos, or coursework screenshots.
+- `MOCK_AI=true` 默认离线演示，不需要公网模型访问。
+- 前端资源本地打包，不加载 CDN。
+- 上传接口检查扩展名、MIME/文件签名、大小、路径安全和任务权限。
+- 下载、流式读取、证据查看均需要认证和任务访问权限。
+- 管理操作写入审计日志。
+- AI 输出只作辅助，报告必须人工复核。
+- 报告引用证据 ID；无效引用会被检测并暴露。
+- 不要把真实涉密或敏感数据用于测试、演示或课程截图。

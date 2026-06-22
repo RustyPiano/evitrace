@@ -6,7 +6,7 @@ services:
       context: ./backend
     environment:
       APP_NAME: ${APP_NAME:-EviTrace}
-      ENV: ${ENV:-production}
+      ENV: ${ENV:-development}
       SECRET_KEY: ${SECRET_KEY:-}
       ACCESS_TOKEN_EXPIRE_HOURS: ${ACCESS_TOKEN_EXPIRE_HOURS:-8}
       DATA_ROOT: /app/data
@@ -37,7 +37,7 @@ services:
       VIDEO_FRAME_INTERVAL_SEC: ${VIDEO_FRAME_INTERVAL_SEC:-10}
       TIME_CONFLICT_MINUTES: ${TIME_CONFLICT_MINUTES:-30}
       FIRST_ADMIN_USERNAME: ${FIRST_ADMIN_USERNAME:-admin}
-      FIRST_ADMIN_PASSWORD: ${FIRST_ADMIN_PASSWORD:-EviTrace-Demo-Admin-2026!}
+      FIRST_ADMIN_PASSWORD: ${FIRST_ADMIN_PASSWORD:-admin123456}
     ports:
       - "8000:8000"
     volumes:
