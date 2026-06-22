@@ -311,6 +311,19 @@ python scripts/evaluate_demo.py
 
 The script writes `evaluation_result.md`.
 
+These metrics are deterministic pipeline validation metrics: workflow completion, planted-conflict recall, and citation-format coverage on the fixture-backed validation set. They are not real multimodal model recognition accuracy. Real-model behavior should be checked through qualitative end-to-end runs and the A/B scaffold below.
+
+Run the A/B comparison scaffold:
+
+```bash
+cd backend
+source .venv/bin/activate
+cd ..
+python scripts/evaluate_ab.py
+```
+
+In the default mock mode, the script runs only the B arm and writes `scripts/ab_result.md` with A-arm columns marked N/A. To run the A arm while keeping media fixtures deterministic, start it with a real OpenAI-compatible LLM configuration, for example `MOCK_LLM=false MOCK_MEDIA=true MOCK_VISION=true LOCAL_LLM_BASE_URL=... LOCAL_LLM_API_KEY=... LOCAL_LLM_MODEL=... python scripts/evaluate_ab.py`. The A arm uses one direct `LocalLLMClient` text call per case and does not fabricate results when the LLM is mocked.
+
 Workbench demo checklist:
 
 1. Log in as admin.
@@ -366,6 +379,7 @@ Evaluation:
 
 ```bash
 python scripts/evaluate_demo.py
+python scripts/evaluate_ab.py
 ```
 
 ## Known Limits
