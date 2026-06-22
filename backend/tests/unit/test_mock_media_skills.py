@@ -219,3 +219,15 @@ def test_invalid_sidecar_fixture_is_ignored_with_warning():
     assert result.success is True
     assert len(result.data["evidence"]) == 1
     assert result.data["evidence"][0]["content"] == "MOCK OCR 文本"
+
+
+def test_media_mock_override_uses_fixture_when_llm_is_real(monkeypatch):
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", True)
+    task_id = "split-mock-image-task"
+    file = _insert_file(task_id, "image.png", "png", "image")
+
+    result = ImageOcrSkill().run(_context(task_id), {"file": serialize_file(file)})
+
+    assert result.success is True
+    assert result.data["evidence"][0]["content"] == "MOCK OCR 文本"

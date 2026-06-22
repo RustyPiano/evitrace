@@ -176,7 +176,41 @@ def test_real_extraction_aggregates_sanitize_warnings(monkeypatch, tmp_path):
 
     assert result.success is True
     assert result.data["events"] == []
-    assert result.warnings == ["事件结果因缺少有效证据引用已丢弃"]
+    assert result.warnings == [
+        "事件结果因缺少有效证据引用已丢弃",
+        "真实模型未抽取到任何要素，请检查模型/提示词",
+    ]
+
+
+def test_real_extraction_prompt_includes_schema_example_and_empty_warning(monkeypatch, tmp_path):
+    captured: dict[str, str] = {}
+
+    class FakeClient:
+        def generate_json(self, system, user, schema):
+            captured["system"] = system
+            captured["user"] = user
+            return schema.model_validate({"entities": [], "events": []})
+
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+
+    result = IntelligenceExtractSkill(llm_client=FakeClient()).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _evidence()},
+    )
+
+    assert result.success is True
+    assert result.warnings == ["真实模型未抽取到任何要素，请检查模型/提示词"]
+    system_prompt = captured["system"]
+    user_prompt = captured["user"]
+    assert '"entities"' in system_prompt
+    assert '"events"' in system_prompt
+    assert '"event_key"' in system_prompt
+    assert '"quantity": {"value": 3, "unit": "辆"}' in system_prompt
+    assert "同一真实事件" in system_prompt
+    assert "必须取自输入证据中的 [E-xxxx] 编号" in system_prompt
+    assert "只输出 JSON" in system_prompt
+    assert "[E-0001]" in user_prompt
+    assert "[E-0002]" in user_prompt
 
 
 def test_merge_extractions_combines_evidence_ids_for_same_fact():

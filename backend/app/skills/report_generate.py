@@ -200,14 +200,22 @@ class ReportGenerateSkill:
         payload = dict(payload or {})
         warnings: list[str] = []
         try:
-            if settings.mock_ai:
+            if settings.effective_mock_llm:
                 markdown = build_mock_report(payload)
             else:
                 client = self.llm_client or LocalLLMClient()
                 system_prompt = (
                     "你是情报报告生成器。仅使用输入中的任务、事件、时间线、冲突和证据摘要；"
-                    "不得新增事实；事实性陈述必须带 [E-xxxx]；输出固定 Markdown 六个章节。"
-                    "三、事件时间线和四、主要冲突将由系统按结构化结果重建。"
+                    "不得新增事实。请逐字输出以下六个二级标题，每个标题独占一行：\n"
+                    "## 一、任务概述\n"
+                    "## 二、资料概况\n"
+                    "## 三、事件时间线\n"
+                    "## 四、主要冲突\n"
+                    "## 五、综合分析结论\n"
+                    "## 六、未确认事项\n"
+                    "一、二、五、六章节中的事实性陈述必须带 [E-xxxx] 证据引用。"
+                    "三、事件时间线和四、主要冲突将由系统按结构化数据覆盖，模型可留简短占位。"
+                    "只输出 Markdown 报告正文。"
                 )
                 markdown = client.generate_text(system_prompt, _build_model_prompt(payload))
                 if not _has_required_report_sections(markdown):

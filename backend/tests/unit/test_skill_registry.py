@@ -31,6 +31,7 @@ def test_is_enabled_reads_database_config():
 
 def test_real_mode_health_requires_local_ocr_and_asr_model_dirs(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", None)
     monkeypatch.setattr(settings, "ocr_model_dir", str(tmp_path / "missing-ocr"), raising=False)
     monkeypatch.setattr(settings, "asr_model_dir", str(tmp_path / "missing-asr"), raising=False)
 
@@ -48,6 +49,22 @@ def test_real_mode_health_requires_local_ocr_and_asr_model_dirs(monkeypatch, tmp
     with SessionLocal() as db:
         assert str(tmp_path) not in db.get(SkillConfig, "image_ocr").last_error
         assert str(tmp_path) not in db.get(SkillConfig, "audio_transcribe").last_error
+
+
+def test_registry_media_health_uses_mock_media_when_llm_is_real(monkeypatch, tmp_path):
+    monkeypatch.setattr(settings, "mock_ai", False)
+    monkeypatch.setattr(settings, "mock_media", True)
+    monkeypatch.setattr(settings, "ocr_model_dir", str(tmp_path / "missing-ocr"), raising=False)
+    monkeypatch.setattr(settings, "asr_model_dir", str(tmp_path / "missing-asr"), raising=False)
+
+    with SessionLocal() as db:
+        ocr = check_skill_health(db, "image_ocr")
+        asr = check_skill_health(db, "audio_transcribe")
+        video = check_skill_health(db, "video_parse")
+
+    assert ocr["last_error"] is None
+    assert asr["last_error"] is None
+    assert video["last_error"] is None
 
 
 def test_health_detail_redacts_sensitive_settings(monkeypatch, tmp_path):

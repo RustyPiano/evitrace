@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     llm_timeout_sec: int = Field(default=180, validation_alias="LLM_TIMEOUT_SEC")
     llm_max_retries: int = Field(default=2, validation_alias="LLM_MAX_RETRIES")
     mock_ai: bool = Field(default=True, validation_alias="MOCK_AI")
+    mock_llm: bool | None = Field(default=None, validation_alias="MOCK_LLM")
+    mock_media: bool | None = Field(default=None, validation_alias="MOCK_MEDIA")
     ocr_model_dir: str | None = Field(default=None, validation_alias="OCR_MODEL_DIR")
     asr_model_dir: str | None = Field(default=None, validation_alias="ASR_MODEL_DIR")
     asr_model_size: str = Field(default="small", validation_alias="ASR_MODEL_SIZE")
@@ -84,6 +86,13 @@ class Settings(BaseSettings):
     @field_validator("ocr_model_dir", "asr_model_dir", mode="before")
     @classmethod
     def empty_model_dir_to_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("mock_llm", "mock_media", mode="before")
+    @classmethod
+    def empty_mock_override_to_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():
             return None
         return value
@@ -133,6 +142,14 @@ class Settings(BaseSettings):
         if not data_root.is_absolute():
             data_root = PROJECT_ROOT / data_root
         return data_root.resolve()
+
+    @property
+    def effective_mock_llm(self) -> bool:
+        return self.mock_ai if self.mock_llm is None else self.mock_llm
+
+    @property
+    def effective_mock_media(self) -> bool:
+        return self.mock_ai if self.mock_media is None else self.mock_media
 
     @property
     def resolved_database_url(self) -> str:

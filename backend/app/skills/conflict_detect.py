@@ -80,8 +80,16 @@ def _time_conflict(
     right: dict[str, Any],
     threshold_minutes: int,
 ) -> tuple[tuple[str, str] | None, str | None]:
-    left_time = parse_time_value(left.get("time_normalized"))
-    right_time = parse_time_value(right.get("time_normalized"))
+    # Prefer the normalized time, but fall back to the raw time_text when the
+    # model could not produce an ISO value (e.g. a bare clock time like "14:00"
+    # with no date). parse_time_value handles both, so this keeps cross-source
+    # conflict detection working on real-LLM output that leaves time_normalized null.
+    left_time = parse_time_value(left.get("time_normalized")) or parse_time_value(
+        left.get("time_text")
+    )
+    right_time = parse_time_value(right.get("time_normalized")) or parse_time_value(
+        right.get("time_text")
+    )
     if left_time is None or right_time is None:
         return None, None
 

@@ -196,3 +196,49 @@ def test_does_not_compare_events_with_different_event_keys():
     )
 
     assert conflicts == []
+
+
+def _bare_time_event(event_id: str, time_text: str) -> dict:
+    # Real-LLM case: a bare clock time in time_text with no ISO time_normalized.
+    return {
+        "event_id": event_id,
+        "event_key": "delta-check-in-harbor",
+        "title": "Delta check-in",
+        "subject": "Delta",
+        "action": "check-in",
+        "object": "Harbor Gate",
+        "time_text": time_text,
+        "time_normalized": None,
+        "location": "Harbor Gate",
+        "quantity": None,
+        "evidence_ids": [f"E-000{event_id[-1]}"],
+        "confidence": 0.9,
+    }
+
+
+def test_detects_time_conflict_from_bare_clock_time_text_without_normalized():
+    # Cross-source/cross-modal real-LLM output often leaves time_normalized null
+    # and keeps a bare clock time in time_text; conflict detection must still fire.
+    conflicts, warnings = detect_conflicts(
+        [
+            _bare_time_event("EVT-001", "14:00"),
+            _bare_time_event("EVT-002", "16:30"),
+        ],
+        time_conflict_minutes=30,
+    )
+
+    assert warnings == []
+    assert [conflict["type"] for conflict in conflicts] == ["time"]
+    assert {conflicts[0]["left"]["value"], conflicts[0]["right"]["value"]} == {"14:00", "16:30"}
+
+
+def test_no_time_conflict_for_close_bare_clock_times():
+    conflicts, _ = detect_conflicts(
+        [
+            _bare_time_event("EVT-001", "14:00"),
+            _bare_time_event("EVT-002", "14:20"),
+        ],
+        time_conflict_minutes=30,
+    )
+
+    assert conflicts == []

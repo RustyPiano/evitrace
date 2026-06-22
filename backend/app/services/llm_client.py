@@ -31,7 +31,7 @@ class LocalLLMClient:
         mock_json: MockJsonCallback | None = None,
         mock_text: MockTextCallback | None = None,
     ) -> None:
-        self.mock_ai = settings.mock_ai if mock_ai is None else mock_ai
+        self.mock_ai = settings.effective_mock_llm if mock_ai is None else mock_ai
         self.base_url = (base_url or settings.local_llm_base_url).rstrip("/")
         self.api_key = api_key or settings.local_llm_api_key
         self.model = model or settings.local_llm_model

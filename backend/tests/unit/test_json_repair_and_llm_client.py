@@ -131,3 +131,14 @@ def test_llm_max_retries_is_capped_at_two():
     client = LocalLLMClient(mock_ai=True, max_retries=99)
 
     assert client.max_retries == 2
+
+
+def test_llm_client_defaults_to_effective_mock_llm(monkeypatch):
+    monkeypatch.setattr("app.services.llm_client.settings.mock_ai", False)
+    monkeypatch.setattr("app.services.llm_client.settings.mock_llm", None)
+
+    assert LocalLLMClient().mock_ai is False
+
+    monkeypatch.setattr("app.services.llm_client.settings.mock_llm", True)
+
+    assert LocalLLMClient().mock_ai is True

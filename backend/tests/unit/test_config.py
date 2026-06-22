@@ -58,3 +58,33 @@ def test_local_model_and_ffmpeg_timeout_settings_are_configurable():
     assert settings.asr_model_dir == "/models/asr"
     assert settings.asr_model_size == "small"
     assert settings.ffmpeg_timeout_sec == 30
+
+
+def test_mock_llm_and_media_default_to_mock_ai():
+    all_mock = Settings(
+        SECRET_KEY="x" * 32,
+        FIRST_ADMIN_PASSWORD="not-default-admin-password",
+        MOCK_AI=True,
+    )
+    all_real = Settings(
+        SECRET_KEY="x" * 32,
+        FIRST_ADMIN_PASSWORD="not-default-admin-password",
+        MOCK_AI=False,
+    )
+
+    assert all_mock.effective_mock_llm is True
+    assert all_mock.effective_mock_media is True
+    assert all_real.effective_mock_llm is False
+    assert all_real.effective_mock_media is False
+
+
+def test_mock_llm_and_media_can_be_split_for_cloud_llm_with_mock_media():
+    settings = Settings(
+        SECRET_KEY="x" * 32,
+        FIRST_ADMIN_PASSWORD="not-default-admin-password",
+        MOCK_AI=False,
+        MOCK_MEDIA=True,
+    )
+
+    assert settings.effective_mock_llm is False
+    assert settings.effective_mock_media is True

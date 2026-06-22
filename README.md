@@ -63,6 +63,21 @@ Real AI mode is offline-first and expects you to prepare local services and weig
 
 The application does not download model weights at runtime. Keep `MOCK_AI=true` until those local dependencies are installed and verified.
 
+## 使用云端 OpenAI 兼容模型（无本地模型时）
+
+如果只有云端 OpenAI 兼容 LLM（例如 DeepSeek），但没有本地 PaddleOCR、faster-whisper 或视频解析依赖，可以让 LLM 走真实云端、媒体解析继续走确定性 fixture。示例 `.env`：
+
+```env
+MOCK_AI=false
+MOCK_LLM=false
+MOCK_MEDIA=true
+LOCAL_LLM_BASE_URL=https://api.deepseek.com/v1
+LOCAL_LLM_API_KEY=<put-your-key-in-private-.env-only>
+LOCAL_LLM_MODEL=deepseek-chat
+```
+
+此模式下，TXT/PDF 仍由本地解析流程真实提取文本证据，云端 LLM 负责要素事件抽取和报告生成；OCR、ASR、视频关键帧/音轨解析使用 fixture，适合没有本地媒体模型的端到端演示与测试。API key 只放在已被 gitignore 的本机 `.env` 中，不要写入代码、README 示例以外的文件或提交记录。
+
 ## Docker Startup
 
 Zero-config MOCK demo:

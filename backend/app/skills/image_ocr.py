@@ -126,7 +126,7 @@ class ImageOcrSkill:
         started = perf_counter()
         file_info = payload["file"]
         try:
-            if settings.mock_ai:
+            if settings.effective_mock_media:
                 evidence, warnings = mock_ocr_evidence(context, file_info)
             else:
                 evidence, warnings = real_ocr_evidence(original_file_path(context, file_info))

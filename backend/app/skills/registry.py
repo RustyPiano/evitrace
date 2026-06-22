@@ -145,20 +145,20 @@ def check_skill_health(db: Session, skill_id: str) -> dict[str, Any]:
             _require_import("fitz")
             _require_import("docx")
             _require_import("charset_normalizer")
-        elif skill_id == "image_ocr" and not settings.mock_ai:
+        elif skill_id == "image_ocr" and not settings.effective_mock_media:
             resolve_ocr_model_dirs()
             _require_import("paddleocr")
-        elif skill_id == "audio_transcribe" and not settings.mock_ai:
+        elif skill_id == "audio_transcribe" and not settings.effective_mock_media:
             resolve_asr_model_path()
             _require_import("faster_whisper")
-        elif skill_id == "video_parse" and not settings.mock_ai:
+        elif skill_id == "video_parse" and not settings.effective_mock_media:
             if shutil.which("ffmpeg") is None:
                 raise RuntimeError("missing executable: ffmpeg")
             resolve_ocr_model_dirs()
             resolve_asr_model_path()
             _require_import("paddleocr")
             _require_import("faster_whisper")
-        elif skill_id in {"intelligence_extract", "report_generate"} and not settings.mock_ai:
+        elif skill_id in {"intelligence_extract", "report_generate"} and not settings.effective_mock_llm:
             from app.services.llm_client import ping_local_llm
 
             health = ping_local_llm()

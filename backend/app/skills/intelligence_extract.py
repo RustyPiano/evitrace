@@ -279,7 +279,7 @@ class IntelligenceExtractSkill:
 
         warnings: list[str] = []
         try:
-            if settings.mock_ai:
+            if settings.effective_mock_llm:
                 raw = _load_fixture(context) or _default_mock_raw(evidence_items)
                 extraction, sanitize_warnings = _sanitize_extraction(raw, evidence_items)
                 warnings.extend(sanitize_warnings)
@@ -315,8 +315,68 @@ class IntelligenceExtractSkill:
         client = self.llm_client or LocalLLMClient()
         task = payload.get("task") or {}
         system_prompt = (
-            "你是情报资料要素提取器。只使用输入证据；无法确定就输出 null；每个事件必须引用证据编号；"
-            "不输出行动建议；不合并明显冲突事实；严格输出符合 schema 的 JSON。"
+            "你是情报资料要素提取器。只使用输入证据抽取实体和事件，不输出行动建议。"
+            "无法确定的字段填 null，不要编造。evidence_ids 必须取自输入证据中的 [E-xxxx] 编号。"
+            "同一真实事件在不同证据中出现时，必须使用相同的 event_key，便于后续规则引擎比对时间、地点、数量冲突。"
+            "Entity.type 只能取 person、organization、location、event、object、time、quantity；"
+            "confidence 填 0 到 1 或 null；Event.evidence_ids 至少包含一个有效证据编号。"
+            "只输出 JSON，不要 Markdown、代码围栏或解释。\n\n"
+            "目标 JSON schema：\n"
+            "{\n"
+            '  "entities": [\n'
+            '    {"type": "person|organization|location|event|object|time|quantity", "name": "str", "confidence": 0.0, "evidence_ids": ["E-0001"]}\n'
+            "  ],\n"
+            '  "events": [\n'
+            "    {\n"
+            '      "event_key": "主体-动作-对象 的规范化短文本(用于归并同一事件)",\n'
+            '      "title": "str",\n'
+            '      "subject": "str|null",\n'
+            '      "action": "str|null",\n'
+            '      "object": "str|null",\n'
+            '      "time_text": "原始时间表述|null",\n'
+            '      "time_normalized": "ISO8601 如 2026-06-01T14:00:00|null",\n'
+            '      "location": "str|null",\n'
+            '      "quantity": {"value": 3, "unit": "辆"} 或 null,\n'
+            '      "evidence_ids": ["E-0001"],\n'
+            '      "confidence": 0.0\n'
+            "    }\n"
+            "  ]\n"
+            "}\n\n"
+            "示例输出：\n"
+            "{\n"
+            '  "entities": [\n'
+            '    {"type": "organization", "name": "第3装甲连", "confidence": 0.9, "evidence_ids": ["E-0001", "E-0002"]},\n'
+            '    {"type": "location", "name": "A镇", "confidence": 0.86, "evidence_ids": ["E-0001", "E-0002"]}\n'
+            "  ],\n"
+            '  "events": [\n'
+            "    {\n"
+            '      "event_key": "第3装甲连-抵达-A镇",\n'
+            '      "title": "第3装甲连抵达A镇",\n'
+            '      "subject": "第3装甲连",\n'
+            '      "action": "抵达",\n'
+            '      "object": "A镇",\n'
+            '      "time_text": "6月1日14时",\n'
+            '      "time_normalized": "2026-06-01T14:00:00",\n'
+            '      "location": "A镇",\n'
+            '      "quantity": {"value": 3, "unit": "辆"},\n'
+            '      "evidence_ids": ["E-0001"],\n'
+            '      "confidence": 0.84\n'
+            "    },\n"
+            "    {\n"
+            '      "event_key": "第3装甲连-抵达-A镇",\n'
+            '      "title": "第3装甲连抵达A镇",\n'
+            '      "subject": "第3装甲连",\n'
+            '      "action": "抵达",\n'
+            '      "object": "A镇",\n'
+            '      "time_text": "6月1日下午2点",\n'
+            '      "time_normalized": "2026-06-01T14:00:00",\n'
+            '      "location": "A镇",\n'
+            '      "quantity": {"value": 5, "unit": "辆"},\n'
+            '      "evidence_ids": ["E-0002"],\n'
+            '      "confidence": 0.8\n'
+            "    }\n"
+            "  ]\n"
+            "}"
         )
         extractions: list[ExtractionResult] = []
         warnings: list[str] = []
@@ -324,6 +384,7 @@ class IntelligenceExtractSkill:
             user_prompt = "\n".join(
                 [
                     f"任务目标：{task.get('objective') or ''}",
+                    "请按目标 JSON schema 抽取。evidence_ids 只能使用下列证据编号；同一真实事件必须复用相同 event_key。",
                     "证据：",
                     *[_format_evidence_for_prompt(evidence) for evidence in batch],
                 ]
@@ -333,4 +394,7 @@ class IntelligenceExtractSkill:
             sanitized, sanitize_warnings = _sanitize_extraction(raw, batch)
             warnings.extend(sanitize_warnings)
             extractions.append(sanitized)
-        return _merge_extractions(extractions), warnings
+        merged = _merge_extractions(extractions)
+        if not merged.entities and not merged.events:
+            warnings.append("真实模型未抽取到任何要素，请检查模型/提示词")
+        return merged, warnings

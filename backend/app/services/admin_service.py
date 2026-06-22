@@ -218,23 +218,25 @@ def _disk_health() -> dict[str, str]:
 
 
 def _llm_health() -> dict[str, str]:
-    if settings.mock_ai:
-        return _health_item("llm", "skipped", "MOCK_AI enabled")
+    if settings.effective_mock_llm:
+        return _health_item("llm", "skipped", "LLM mock mode enabled")
     health = ping_local_llm()
     if health.get("status") == "healthy":
-        return _health_item("llm", "healthy", "local model probe ok")
+        return _health_item("llm", "healthy", "LLM probe ok")
     return _health_item("llm", "unavailable", health.get("message") or health.get("code"))
 
 
 def _ffmpeg_health() -> dict[str, str]:
+    if settings.effective_mock_media:
+        return _health_item("ffmpeg", "skipped", "media mock mode enabled")
     if shutil.which("ffmpeg") is None:
         return _health_item("ffmpeg", "unavailable", "ffmpeg executable not found")
     return _health_item("ffmpeg", "healthy", "ffmpeg executable available")
 
 
 def _ocr_health() -> dict[str, str]:
-    if settings.mock_ai:
-        return _health_item("ocr", "skipped", "MOCK_AI enabled")
+    if settings.effective_mock_media:
+        return _health_item("ocr", "skipped", "media mock mode enabled")
     if importlib.util.find_spec("paddleocr") is None:
         return _health_item("ocr", "unavailable", "paddleocr dependency not installed")
     if not _configured_directory_ready(settings.ocr_model_dir):
@@ -243,8 +245,8 @@ def _ocr_health() -> dict[str, str]:
 
 
 def _asr_health() -> dict[str, str]:
-    if settings.mock_ai:
-        return _health_item("asr", "skipped", "MOCK_AI enabled")
+    if settings.effective_mock_media:
+        return _health_item("asr", "skipped", "media mock mode enabled")
     if importlib.util.find_spec("faster_whisper") is None:
         return _health_item("asr", "unavailable", "faster_whisper dependency not installed")
     if not _configured_directory_ready(settings.asr_model_dir):

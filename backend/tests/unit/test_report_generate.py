@@ -106,6 +106,36 @@ def test_real_report_notice_is_prepended_once_when_structure_is_valid(monkeypatc
     assert result.warnings == []
 
 
+def test_real_report_prompt_requires_exact_six_headings(monkeypatch, tmp_path):
+    captured: dict[str, str] = {}
+
+    class FakeClient:
+        def generate_text(self, system, user):
+            captured["system"] = system
+            captured["user"] = user
+            return "\n\n".join(
+                [
+                    "## 一、任务概述\n任务目标。[E-0001]",
+                    "## 二、资料概况\n资料概况。[E-0001]",
+                    "## 三、事件时间线\n占位。[E-0001]",
+                    "## 四、主要冲突\n占位。[E-0001]",
+                    "## 五、综合分析结论\n结论。[E-0001]",
+                    "## 六、未确认事项\n待复核。[E-0001]",
+                ]
+            )
+
+    monkeypatch.setattr("app.skills.report_generate.settings.mock_ai", False)
+
+    result = ReportGenerateSkill(llm_client=FakeClient()).run(_context(tmp_path), _payload())
+
+    assert result.warnings == []
+    for heading in FIXED_HEADINGS:
+        assert heading in captured["system"]
+    assert "逐字输出" in captured["system"]
+    assert "一、二、五、六" in captured["system"]
+    assert "三、事件时间线和四、主要冲突将由系统按结构化数据覆盖" in captured["system"]
+
+
 def test_real_report_replaces_model_timeline_and_conflicts_with_structured_cited_sections(
     monkeypatch, tmp_path
 ):
