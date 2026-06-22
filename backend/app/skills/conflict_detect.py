@@ -1,17 +1,25 @@
 import itertools
-import re
+import json
 from datetime import date, datetime, time, timezone
+from functools import lru_cache
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 
 from app.config import settings
 from app.constants import CONFLICT_STATUS_UNREVIEWED
 from app.schemas_analysis import Conflict
+from app.utils.event_normalize import (
+    _norm,
+    canonical_event_key,
+    canonical_structured_key,
+    group_events_for_conflict,
+    normalize_location_alias,
+)
 from app.utils.time_normalize import parse_time_value
 
 from .base import SkillContext, SkillManifest, SkillResult
 
-LOCATION_PUNCTUATION_RE = re.compile(r"[\s,，.。;；:：、\-_\[\]【】()（）]+")
 UNKNOWN_VALUES = {"", "未知", "unknown", "null", "none"}
 
 
@@ -20,8 +28,35 @@ def _meaningful(value: str | None) -> str:
     return "" if text.casefold() in UNKNOWN_VALUES else text
 
 
-def _normalize_location(value: str | None) -> str:
-    return LOCATION_PUNCTUATION_RE.sub("", _meaningful(value)).casefold()
+def _normalize_conflict_location(
+    value: str | None, alias_map: dict[str, str] | None
+) -> str:
+    return normalize_location_alias(_meaningful(value), alias_map)
+
+
+def _raw_event_key(event: dict[str, Any]) -> str:
+    return str(event.get("event_key") or "").strip()
+
+
+def _event_has_comparison_key(event: dict[str, Any]) -> bool:
+    return bool(_norm(event.get("event_key")) or canonical_structured_key(event))
+
+
+def _group_event_key(group: list[dict[str, Any]]) -> str:
+    for event in group:
+        event_key = _raw_event_key(event)
+        if event_key:
+            return event_key
+
+    event_key = canonical_event_key(group[0]) if group else ""
+    if event_key:
+        return event_key
+
+    for event in group:
+        event_key = canonical_event_key(event)
+        if event_key:
+            return event_key
+    return ""
 
 
 def _event_side(event: dict[str, Any], value: str) -> dict[str, Any]:
@@ -139,18 +174,35 @@ def detect_conflicts(
     events: list[dict[str, Any]],
     *,
     time_conflict_minutes: int | None = None,
+    alias_map: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    threshold = settings.time_conflict_minutes if time_conflict_minutes is None else time_conflict_minutes
-    groups: dict[str, list[dict[str, Any]]] = {}
-    for event in events:
-        event_key = str(event.get("event_key") or "").strip()
-        if event_key:
-            groups.setdefault(event_key, []).append(event)
+    threshold = (
+        settings.time_conflict_minutes
+        if time_conflict_minutes is None
+        else time_conflict_minutes
+    )
+    groups = group_events_for_conflict(events, alias_map)
 
     conflicts: list[dict[str, Any]] = []
     warnings: list[str] = []
-    for event_key, group in groups.items():
+    missing_key_event_ids = [
+        str(event.get("event_id") or "unknown")
+        for event in events
+        if not _event_has_comparison_key(event)
+    ]
+    if missing_key_event_ids:
+        sample = ", ".join(missing_key_event_ids[:5])
+        if len(missing_key_event_ids) > 5:
+            sample = f"{sample}, ..."
+        warnings.append(
+            f"{len(missing_key_event_ids)} 个事件缺少可归一化事件键，未参与冲突比对（示例: {sample}）"
+        )
+
+    for group in groups:
         if len(group) < 2:
+            continue
+        event_key = _group_event_key(group)
+        if not event_key:
             continue
         for left, right in itertools.combinations(group, 2):
             time_values, time_warning = _time_conflict(left, right, threshold)
@@ -170,7 +222,12 @@ def detect_conflicts(
 
             left_location = _meaningful(left.get("location"))
             right_location = _meaningful(right.get("location"))
-            if left_location and right_location and _normalize_location(left_location) != _normalize_location(right_location):
+            if (
+                left_location
+                and right_location
+                and _normalize_conflict_location(left_location, alias_map)
+                != _normalize_conflict_location(right_location, alias_map)
+            ):
                 _add_conflict(
                     conflicts,
                     conflict_type="location",
@@ -208,6 +265,30 @@ def detect_conflicts(
     return conflicts, warnings
 
 
+@lru_cache
+def _load_event_alias_map(alias_path: str | None) -> tuple[dict[str, str], list[str]]:
+    if not alias_path:
+        return {}, []
+    try:
+        path = Path(alias_path).expanduser()
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {}, [f"EVENT_ALIAS_PATH 加载失败，已忽略别名配置: {type(exc).__name__}"]
+    if not isinstance(data, dict):
+        return {}, ["EVENT_ALIAS_PATH 内容必须是 JSON 对象，已忽略别名配置"]
+
+    aliases: dict[str, str] = {}
+    for surface, canonical in data.items():
+        if (
+            isinstance(surface, str)
+            and isinstance(canonical, str)
+            and surface.strip()
+            and canonical.strip()
+        ):
+            aliases[surface] = canonical
+    return aliases, []
+
+
 class ConflictDetectSkill:
     manifest = SkillManifest(
         id="conflict_detect",
@@ -222,10 +303,16 @@ class ConflictDetectSkill:
 
     def run(self, context: SkillContext, payload: Any) -> SkillResult:
         started = perf_counter()
-        conflicts, warnings = detect_conflicts(list(payload.get("events") or []))
+        alias_map, alias_warnings = _load_event_alias_map(settings.event_alias_path)
+        conflicts, warnings = detect_conflicts(
+            list(payload.get("events") or []), alias_map=alias_map
+        )
         return SkillResult(
             success=True,
-            warnings=warnings,
+            warnings=alias_warnings + warnings,
             data={"conflicts": conflicts},
-            metrics={"duration_ms": int((perf_counter() - started) * 1000), "conflict_count": len(conflicts)},
+            metrics={
+                "duration_ms": int((perf_counter() - started) * 1000),
+                "conflict_count": len(conflicts),
+            },
         )

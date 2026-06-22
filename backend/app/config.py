@@ -65,6 +65,9 @@ class Settings(BaseSettings):
     time_conflict_minutes: int = Field(
         default=30, validation_alias="TIME_CONFLICT_MINUTES"
     )
+    event_alias_path: str | None = Field(
+        default=None, validation_alias="EVENT_ALIAS_PATH"
+    )
     first_admin_username: str = Field(
         default="admin", validation_alias="FIRST_ADMIN_USERNAME"
     )
@@ -90,7 +93,14 @@ class Settings(BaseSettings):
             raise ValueError("must not be empty")
         return value
 
-    @field_validator("ocr_base_url", "asr_base_url", "ocr_model_dir", "asr_model_dir", mode="before")
+    @field_validator(
+        "ocr_base_url",
+        "asr_base_url",
+        "ocr_model_dir",
+        "asr_model_dir",
+        "event_alias_path",
+        mode="before",
+    )
     @classmethod
     def empty_media_setting_to_none(cls, value: object) -> object:
         if isinstance(value, str) and not value.strip():

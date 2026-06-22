@@ -5,6 +5,9 @@ def _event(
     event_id: str,
     *,
     event_key: str = "车队-抵达-目标区",
+    subject: str = "车队",
+    action: str = "抵达",
+    object_: str = "目标区",
     time_normalized: str | None = None,
     location: str | None = None,
     quantity: dict | None = None,
@@ -13,9 +16,9 @@ def _event(
         "event_id": event_id,
         "event_key": event_key,
         "title": "抵达",
-        "subject": "车队",
-        "action": "抵达",
-        "object": "目标区",
+        "subject": subject,
+        "action": action,
+        "object": object_,
         "time_text": time_normalized,
         "time_normalized": time_normalized,
         "location": location,
@@ -191,11 +194,172 @@ def test_does_not_compare_events_with_different_event_keys():
     conflicts, _ = detect_conflicts(
         [
             _event("EVT-001", event_key="车队-抵达-目标区", location="地点 A"),
-            _event("EVT-002", event_key="人员-抵达-目标区", location="地点 B"),
+            _event(
+                "EVT-002",
+                event_key="人员-抵达-目标区",
+                subject="人员",
+                location="地点 B",
+            ),
         ]
     )
 
     assert conflicts == []
+
+
+def test_detects_conflict_when_event_keys_drift_but_structured_event_matches():
+    conflicts, warnings = detect_conflicts(
+        [
+            _event(
+                "EVT-001",
+                event_key="warehouse_activity",
+                time_normalized="2026-06-01T14:00:00",
+                quantity={"value": 3, "unit": "辆"},
+            ),
+            _event(
+                "EVT-002",
+                event_key="east_warehouse_activity",
+                time_normalized="2026-06-01T16:00:00",
+                quantity={"value": 5, "unit": "辆"},
+            ),
+            _event(
+                "EVT-003",
+                event_key="warehouse_vehicle_event",
+                time_normalized="2026-06-01T14:10:00",
+                quantity={"value": 3, "unit": "辆"},
+            ),
+        ],
+        time_conflict_minutes=30,
+    )
+
+    assert warnings == []
+    assert {conflict["type"] for conflict in conflicts} == {"time", "quantity"}
+
+
+def test_does_not_report_location_conflict_for_configured_aliases():
+    conflicts, _ = detect_conflicts(
+        [
+            _event("EVT-001", location="东部仓库"),
+            _event("EVT-002", location="东仓"),
+        ],
+        alias_map={"东仓": "东部仓库"},
+    )
+
+    assert conflicts == []
+
+
+def test_does_not_merge_similar_structured_events_with_different_actions():
+    conflicts, _ = detect_conflicts(
+        [
+            _event(
+                "EVT-001",
+                event_key="fleet_arrival",
+                action="抵达",
+                time_normalized="2026-06-01T14:00:00",
+            ),
+            _event(
+                "EVT-002",
+                event_key="fleet_not_arrival",
+                action="未抵达",
+                time_normalized="2026-06-01T16:00:00",
+            ),
+        ],
+        time_conflict_minutes=30,
+    )
+
+    assert conflicts == []
+
+
+def test_does_not_merge_same_object_when_actions_differ():
+    conflicts, _ = detect_conflicts(
+        [
+            _event(
+                "EVT-001",
+                event_key="load_east_warehouse",
+                action="装载",
+                object_="东部仓库",
+                location="东部仓库",
+                quantity={"value": 3, "unit": "辆"},
+            ),
+            _event(
+                "EVT-002",
+                event_key="unload_east_warehouse",
+                action="卸载",
+                object_="东部仓库",
+                location="东部仓库",
+                quantity={"value": 5, "unit": "辆"},
+            ),
+        ]
+    )
+
+    assert conflicts == []
+
+
+def test_detects_location_conflict_without_facility_suffix_reduction():
+    conflicts, _ = detect_conflicts(
+        [
+            _event("EVT-001", location="东部仓库"),
+            _event("EVT-002", location="东部基地"),
+        ]
+    )
+
+    assert [conflict["type"] for conflict in conflicts] == ["location"]
+
+
+def test_preserves_exact_event_key_grouping_when_subjects_differ():
+    conflicts, warnings = detect_conflicts(
+        [
+            _event(
+                "EVT-001",
+                event_key="shared-checkpoint-event",
+                subject="车队",
+                time_normalized="2026-06-01T14:00:00",
+            ),
+            _event(
+                "EVT-002",
+                event_key="shared-checkpoint-event",
+                subject="人员",
+                time_normalized="2026-06-01T16:00:00",
+            ),
+        ],
+        time_conflict_minutes=30,
+    )
+
+    assert warnings == []
+    assert [conflict["type"] for conflict in conflicts] == ["time"]
+    assert conflicts[0]["event_key"] == "shared-checkpoint-event"
+
+
+def test_detects_conflict_for_empty_event_key_when_structured_event_matches():
+    conflicts, _ = detect_conflicts(
+        [
+            _event("EVT-001", event_key="", time_normalized="2026-06-01T14:00:00"),
+            _event("EVT-002", event_key="", time_normalized="2026-06-01T16:00:00"),
+        ],
+        time_conflict_minutes=30,
+    )
+
+    assert [conflict["type"] for conflict in conflicts] == ["time"]
+
+
+def test_empty_unstructured_event_key_warnings_are_aggregated():
+    events = [
+        _event(
+            f"EVT-{index:03d}",
+            event_key="",
+            subject="",
+            action="",
+            object_="",
+            time_normalized="2026-06-01T14:00:00",
+        )
+        for index in range(1, 8)
+    ]
+
+    conflicts, warnings = detect_conflicts(events)
+
+    assert conflicts == []
+    assert warnings == [
+        "7 个事件缺少可归一化事件键，未参与冲突比对（示例: EVT-001, EVT-002, EVT-003, EVT-004, EVT-005, ...）"
+    ]
 
 
 def _bare_time_event(event_id: str, time_text: str) -> dict:
