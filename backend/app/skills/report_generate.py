@@ -13,6 +13,7 @@ from app.utils.citations import (
     ordered_unique,
     validate_report_citations,
 )
+from app.utils.run_mode import run_mode_metadata
 
 from .base import SkillContext, SkillManifest, SkillResult
 
@@ -110,6 +111,36 @@ def _with_report_notice(markdown: str) -> str:
     if body.startswith(REPORT_NOTICE):
         return body
     return f"{REPORT_NOTICE}\n\n{body}"
+
+
+def _component_versions(metadata: dict[str, Any]) -> str:
+    required_ids = ["intelligence_extract", "conflict_detect", "report_generate"]
+    versions = {skill["id"]: skill["version"] for skill in metadata["skills"]}
+    return ", ".join(f"{skill_id}@{versions[skill_id]}" for skill_id in required_ids)
+
+
+def _source_label(source: str) -> str:
+    return {"http": "http", "lib": "本地库", "fixture": "演示"}[source]
+
+
+def _with_run_metadata(markdown: str) -> str:
+    markdown = _with_report_notice(markdown)
+    metadata = run_mode_metadata()
+    llm = metadata["llm"]["model"] if metadata["llm"]["real"] else "演示"
+    if metadata["vision"]["real"]:
+        vision = metadata["vision"]["model"] or "未启用"
+    else:
+        vision = "演示"
+    line = (
+        f"> 运行模式：{metadata['mode_label']}"
+        f"｜LLM：{llm}"
+        f"｜视觉：{vision}"
+        f"｜OCR：{_source_label(metadata['ocr']['source'])}"
+        f"｜ASR：{_source_label(metadata['asr']['source'])}"
+        f"｜分析组件：{_component_versions(metadata)}"
+    )
+    body = markdown[len(REPORT_NOTICE) :].lstrip()
+    return f"{REPORT_NOTICE}\n\n{line}\n\n{body}"
 
 
 def _has_required_report_sections(markdown: str) -> bool:
@@ -227,6 +258,7 @@ class ReportGenerateSkill:
             warnings.append("报告模型生成失败，已使用模板降级")
             markdown = build_fallback_report(payload)
 
+        markdown = _with_run_metadata(markdown)
         markdown = _with_structured_fact_sections(markdown, payload)
         citation_check = validate_report_citations(markdown, _valid_ids(list(payload.get("evidence") or [])))
         if citation_check.invalid_citations:

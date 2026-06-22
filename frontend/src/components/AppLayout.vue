@@ -18,6 +18,15 @@
       <el-header class="app-header">
         <span class="page-title">情报工作台</span>
         <div class="header-actions">
+          <el-tag
+            v-if="runMode"
+            size="small"
+            effect="plain"
+            :type="runModeTagType"
+            :title="runModeTitle"
+          >
+            {{ runMode.mode_label }}
+          </el-tag>
           <span class="user-label">{{ authStore.user?.username }}</span>
           <el-tag size="small" effect="plain">{{ authStore.user?.role }}</el-tag>
           <el-button @click="logout">退出</el-button>
@@ -32,16 +41,51 @@
 </template>
 
 <script setup lang="ts">
+import { computed, onMounted, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 
+import { getSystemMode } from "@/api/system";
 import { useAuthStore } from "@/stores/auth";
+import type { RunModeMetadata } from "@/types/system";
 
 const route = useRoute();
 const router = useRouter();
 const authStore = useAuthStore();
+const runMode = ref<RunModeMetadata | null>(null);
+
+const runModeTagType = computed(() => {
+  if (runMode.value?.mode === "real") {
+    return "success";
+  }
+  if (runMode.value?.mode === "hybrid") {
+    return "warning";
+  }
+  return "info";
+});
+
+const runModeTitle = computed(() => {
+  if (!runMode.value) {
+    return "";
+  }
+  const metadata = runMode.value;
+  return [
+    `LLM：${metadata.llm.real ? metadata.llm.model : "演示"}`,
+    `视觉：${metadata.vision.real ? metadata.vision.model || "未启用" : "演示"}`,
+    `OCR：${sourceLabel(metadata.ocr.source)}`,
+    `ASR：${sourceLabel(metadata.asr.source)}`
+  ].join("｜");
+});
+
+onMounted(async () => {
+  runMode.value = await getSystemMode();
+});
 
 function logout() {
   authStore.logout();
   router.push("/login");
+}
+
+function sourceLabel(source: "http" | "lib" | "fixture") {
+  return { http: "http", lib: "本地库", fixture: "演示" }[source];
 }
 </script>

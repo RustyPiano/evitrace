@@ -103,7 +103,36 @@ def test_real_report_notice_is_prepended_once_when_structure_is_valid(monkeypatc
     markdown = result.data["report_markdown"]
     assert markdown.startswith(REPORT_NOTICE)
     assert markdown.count(REPORT_NOTICE) == 1
+    assert markdown.splitlines()[2].startswith("> 运行模式：")
     assert result.warnings == []
+
+
+def test_report_metadata_is_inserted_after_notice_and_before_body(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.skills.report_generate.settings.mock_ai", False)
+    monkeypatch.setattr("app.skills.report_generate.settings.mock_media", False)
+    monkeypatch.setattr("app.skills.report_generate.settings.mock_vision", True)
+    monkeypatch.setattr("app.skills.report_generate.settings.local_llm_model", "deepseek-v4-flash")
+    monkeypatch.setattr("app.skills.report_generate.settings.ocr_base_url", "http://ocr.local")
+    monkeypatch.setattr("app.skills.report_generate.settings.asr_base_url", None)
+
+    result = ReportGenerateSkill().run(_context(tmp_path), _payload())
+
+    lines = result.data["report_markdown"].splitlines()
+    metadata_line = lines[2]
+    assert lines[0] == REPORT_NOTICE
+    assert metadata_line.startswith("> 运行模式：混合模式")
+    assert "LLM：deepseek-v4-flash" in metadata_line
+    assert "视觉：演示" in metadata_line
+    assert "OCR：http" in metadata_line
+    assert "ASR：本地库" in metadata_line
+    assert "intelligence_extract@" in metadata_line
+    assert "conflict_detect@" in metadata_line
+    assert "report_generate@" in metadata_line
+    assert "base_url" not in metadata_line
+    assert "api_key" not in metadata_line
+    assert "http://ocr.local" not in metadata_line
+    assert result.data["citation_check"]["invalid_citations"] == []
+    assert result.data["citation_check"]["citation_coverage"] == 1.0
 
 
 def test_real_report_prompt_requires_exact_six_headings(monkeypatch, tmp_path):
