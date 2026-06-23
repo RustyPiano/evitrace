@@ -17,6 +17,30 @@ os.environ["SECRET_KEY"] = "test-secret-key-with-at-least-32-bytes"
 os.environ["FIRST_ADMIN_USERNAME"] = "admin"
 os.environ["FIRST_ADMIN_PASSWORD"] = "admin-password"
 
+# Hermetic test config: the suite must be deterministic regardless of the
+# developer's local .env. Environment variables take precedence over the .env
+# file in pydantic-settings, so pin the demo/mock defaults here. Without this, a
+# real-mode .env (OCR_BASE_URL/ASR_BASE_URL/VLM_*) makes health and mock-media
+# tests probe live local services and fail. Tests that need real mode override
+# `settings` per-test via monkeypatch.
+os.environ["MOCK_AI"] = "true"
+for _hermetic_key in (
+    "MOCK_LLM",
+    "MOCK_MEDIA",
+    "MOCK_VISION",
+    "OCR_BASE_URL",
+    "ASR_BASE_URL",
+    "OCR_MODEL_DIR",
+    "ASR_MODEL_DIR",
+    "VLM_BASE_URL",
+    "VLM_API_KEY",
+    "VLM_MODEL",
+):
+    os.environ[_hermetic_key] = ""
+os.environ["LOCAL_LLM_BASE_URL"] = "http://localhost:11434/v1"
+os.environ["LOCAL_LLM_API_KEY"] = "local"
+os.environ["LOCAL_LLM_MODEL"] = "qwen-local"
+
 from app.config import settings
 from app.database import Base, SessionLocal, engine
 from app.main import app
