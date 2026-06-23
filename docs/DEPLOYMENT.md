@@ -205,6 +205,19 @@ pip install -r requirements-optional.txt
 MOCK_AI=false uvicorn app.main:app --reload
 ```
 
+## 性能与成本（真实模型，大输入务必看）
+
+真实模式下要素抽取按 **30 条证据/批、每批一次 LLM 调用**。证据量越大，调用次数与 token 成本**线性增长**——例如 61 个文档约产生 8121 条证据 → 约 271 次真实 LLM 调用/次分析。注意：
+
+- **成本随证据量线性增长**：大语料一次分析可能消耗上百万 token。`EXTRACT_CONCURRENCY`（默认 4，1..16）只影响**速度**（并发批次数），不降低总 token。
+- **进度**：抽取阶段进度会从 55% 按批次推进到 70%（`extracting i/N`）；不再长时间停在 55%。
+- **可随时止血**：分析进行中在工作台点「停止分析」（`POST /tasks/{id}/runs/cancel`）即协作式取消——未开始的批次立即不再调用 LLM（最多再完成 `EXTRACT_CONCURRENCY` 个在飞批次），不进入冲突/报告阶段。
+- **务必避免用 `--reload` 跑真实分析**：`uvicorn --reload` 在任何文件变动时重启进程，会**中断正在运行的长任务**（运行被标记“服务重启导致运行中断”，需重跑）。真实/长任务请用不带 `--reload` 的命令，例如：
+  ```bash
+  cd backend && MOCK_AI=false ./.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8088
+  ```
+- 控制成本的常用做法：先用较小的文档子集试跑；确认效果后再放大；或下调批大小/证据量。
+
 ## 生产和安全配置
 
 Docker 演示默认账号是 `admin / admin123456`，仅用于本地演示。
