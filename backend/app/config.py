@@ -48,6 +48,15 @@ class Settings(BaseSettings):
     vlm_model: str | None = Field(default=None, validation_alias="VLM_MODEL")
     llm_timeout_sec: int = Field(default=180, validation_alias="LLM_TIMEOUT_SEC")
     llm_max_retries: int = Field(default=2, validation_alias="LLM_MAX_RETRIES")
+    llm_rate_limit_max_retries: int = Field(
+        default=5, validation_alias="LLM_RATE_LIMIT_MAX_RETRIES"
+    )
+    llm_backoff_base_sec: float = Field(
+        default=1.0, validation_alias="LLM_BACKOFF_BASE_SEC"
+    )
+    llm_backoff_max_sec: float = Field(
+        default=30.0, validation_alias="LLM_BACKOFF_MAX_SEC"
+    )
     extract_concurrency: int = Field(default=4, validation_alias="EXTRACT_CONCURRENCY")
     extract_batch_max_items: int = Field(default=30, validation_alias="EXTRACT_BATCH_MAX_ITEMS")
     extract_batch_max_chars: int = Field(default=12000, validation_alias="EXTRACT_BATCH_MAX_CHARS")
@@ -102,6 +111,21 @@ class Settings(BaseSettings):
     @classmethod
     def clamp_extract_concurrency(cls, value: int) -> int:
         return min(max(value, 1), 16)
+
+    @field_validator("llm_rate_limit_max_retries")
+    @classmethod
+    def clamp_llm_rate_limit_max_retries(cls, value: int) -> int:
+        return min(max(value, 0), 10)
+
+    @field_validator("llm_backoff_base_sec")
+    @classmethod
+    def clamp_llm_backoff_base_sec(cls, value: float) -> float:
+        return min(max(value, 0.1), 10.0)
+
+    @field_validator("llm_backoff_max_sec")
+    @classmethod
+    def clamp_llm_backoff_max_sec(cls, value: float) -> float:
+        return min(max(value, 1.0), 120.0)
 
     @field_validator("extract_batch_max_items")
     @classmethod

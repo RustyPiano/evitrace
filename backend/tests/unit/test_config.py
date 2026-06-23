@@ -116,6 +116,30 @@ def test_extract_cost_controls_are_clamped_to_supported_ranges():
     assert too_high.extract_max_files_confirm == 100000
 
 
+def test_llm_retry_backoff_settings_are_clamped_to_supported_ranges():
+    too_low = Settings(
+        SECRET_KEY="x" * 32,
+        FIRST_ADMIN_PASSWORD="not-default-admin-password",
+        LLM_RATE_LIMIT_MAX_RETRIES=-1,
+        LLM_BACKOFF_BASE_SEC=0.01,
+        LLM_BACKOFF_MAX_SEC=0.5,
+    )
+    too_high = Settings(
+        SECRET_KEY="x" * 32,
+        FIRST_ADMIN_PASSWORD="not-default-admin-password",
+        LLM_RATE_LIMIT_MAX_RETRIES=99,
+        LLM_BACKOFF_BASE_SEC=99.0,
+        LLM_BACKOFF_MAX_SEC=999.0,
+    )
+
+    assert too_low.llm_rate_limit_max_retries == 0
+    assert too_low.llm_backoff_base_sec == 0.1
+    assert too_low.llm_backoff_max_sec == 1.0
+    assert too_high.llm_rate_limit_max_retries == 10
+    assert too_high.llm_backoff_base_sec == 10.0
+    assert too_high.llm_backoff_max_sec == 120.0
+
+
 def test_empty_media_service_urls_become_none():
     settings = Settings(
         SECRET_KEY="x" * 32,
