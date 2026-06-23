@@ -4,8 +4,9 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, BackgroundTasks, Depends, status
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, status
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -22,6 +23,10 @@ from app.skills.report_generate import ReportGenerateSkill, write_latest_report
 
 router = APIRouter(tags=["analysis"])
 UNSAFE_FILENAME_RE = re.compile(r"[\\/:*?\"<>|\s]+")
+
+
+class RunStartRequest(BaseModel):
+    confirm_large: bool = False
 
 
 def _loads(value: str, default):
@@ -113,17 +118,18 @@ def _serialize_run_summary(run: TaskRun, has_result: bool) -> dict:
 def start_analysis_run(
     task_id: str,
     background_tasks: BackgroundTasks,
+    payload: RunStartRequest = Body(default=RunStartRequest()),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    run = orchestrator.start_run(db, task_id, current_user)
+    run = orchestrator.start_run(db, task_id, current_user, confirm_large=payload.confirm_large)
     record_audit(
         db,
         user_id=current_user.id,
         action="analysis_started",
         resource_type="task",
         resource_id=task_id,
-        detail={"run_id": run.id},
+        detail={"run_id": run.id, "confirm_large": payload.confirm_large},
     )
     db.commit()
     background_tasks.add_task(orchestrator.execute_run, task_id, run.id)

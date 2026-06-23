@@ -186,12 +186,20 @@ def _task_payload(task: Task) -> dict[str, Any]:
     }
 
 
-def start_run(db: Session, task_id: str, current_user) -> TaskRun:
+def start_run(db: Session, task_id: str, current_user, confirm_large: bool = False) -> TaskRun:
     with run_guard.single_run_start_lock():
         task = ensure_task_access(db, task_id, current_user)
         file_count = db.query(TaskFile).filter(TaskFile.task_id == task.id).count()
         if file_count == 0:
             raise AppError("TASK_NOT_READY", "无可分析文件", status.HTTP_409_CONFLICT)
+        threshold = settings.extract_max_files_confirm
+        if threshold > 0 and file_count > threshold and not confirm_large:
+            raise AppError(
+                "RUN_TOO_LARGE",
+                f"本次包含 {file_count} 个文件，超过确认阈值 {threshold}，"
+                f"真实分析可能产生大量模型调用与费用。如确认继续，请再次确认。",
+                status.HTTP_409_CONFLICT,
+            )
         if task.status in TASK_RUNNING_STATUSES:
             raise AppError("TASK_ALREADY_RUNNING", "已有任务运行", status.HTTP_409_CONFLICT)
         run_guard.ensure_no_active_run(db)

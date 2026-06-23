@@ -88,6 +88,34 @@ def test_extract_concurrency_is_clamped_to_supported_range():
     assert too_high.extract_concurrency == 16
 
 
+def test_extract_cost_controls_are_clamped_to_supported_ranges():
+    too_low = Settings(
+        SECRET_KEY="x" * 32,
+        FIRST_ADMIN_PASSWORD="not-default-admin-password",
+        EXTRACT_BATCH_MAX_ITEMS=0,
+        EXTRACT_BATCH_MAX_CHARS=999,
+        EXTRACT_MIN_EVIDENCE_CHARS=-1,
+        EXTRACT_MAX_FILES_CONFIRM=-1,
+    )
+    too_high = Settings(
+        SECRET_KEY="x" * 32,
+        FIRST_ADMIN_PASSWORD="not-default-admin-password",
+        EXTRACT_BATCH_MAX_ITEMS=999,
+        EXTRACT_BATCH_MAX_CHARS=999999,
+        EXTRACT_MIN_EVIDENCE_CHARS=9999,
+        EXTRACT_MAX_FILES_CONFIRM=999999,
+    )
+
+    assert too_low.extract_batch_max_items == 1
+    assert too_low.extract_batch_max_chars == 1000
+    assert too_low.extract_min_evidence_chars == 0
+    assert too_low.extract_max_files_confirm == 0
+    assert too_high.extract_batch_max_items == 500
+    assert too_high.extract_batch_max_chars == 120000
+    assert too_high.extract_min_evidence_chars == 2000
+    assert too_high.extract_max_files_confirm == 100000
+
+
 def test_empty_media_service_urls_become_none():
     settings = Settings(
         SECRET_KEY="x" * 32,

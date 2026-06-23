@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     llm_timeout_sec: int = Field(default=180, validation_alias="LLM_TIMEOUT_SEC")
     llm_max_retries: int = Field(default=2, validation_alias="LLM_MAX_RETRIES")
     extract_concurrency: int = Field(default=4, validation_alias="EXTRACT_CONCURRENCY")
+    extract_batch_max_items: int = Field(default=30, validation_alias="EXTRACT_BATCH_MAX_ITEMS")
+    extract_batch_max_chars: int = Field(default=12000, validation_alias="EXTRACT_BATCH_MAX_CHARS")
+    extract_min_evidence_chars: int = Field(default=0, validation_alias="EXTRACT_MIN_EVIDENCE_CHARS")
+    extract_max_files_confirm: int = Field(default=20, validation_alias="EXTRACT_MAX_FILES_CONFIRM")
     mock_ai: bool = Field(default=True, validation_alias="MOCK_AI")
     mock_llm: bool | None = Field(default=None, validation_alias="MOCK_LLM")
     mock_media: bool | None = Field(default=None, validation_alias="MOCK_MEDIA")
@@ -98,6 +102,26 @@ class Settings(BaseSettings):
     @classmethod
     def clamp_extract_concurrency(cls, value: int) -> int:
         return min(max(value, 1), 16)
+
+    @field_validator("extract_batch_max_items")
+    @classmethod
+    def clamp_extract_batch_max_items(cls, value: int) -> int:
+        return min(max(value, 1), 500)
+
+    @field_validator("extract_batch_max_chars")
+    @classmethod
+    def clamp_extract_batch_max_chars(cls, value: int) -> int:
+        return min(max(value, 1000), 120000)
+
+    @field_validator("extract_min_evidence_chars")
+    @classmethod
+    def clamp_extract_min_evidence_chars(cls, value: int) -> int:
+        return min(max(value, 0), 2000)
+
+    @field_validator("extract_max_files_confirm")
+    @classmethod
+    def clamp_extract_max_files_confirm(cls, value: int) -> int:
+        return min(max(value, 0), 100000)
 
     @field_validator(
         "ocr_base_url",

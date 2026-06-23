@@ -50,13 +50,49 @@ def _format_evidence_for_prompt(evidence: dict[str, Any]) -> str:
     return f"[{display_id}][{_source_name(evidence)}][{_locator_text(evidence)}] {_evidence_text(evidence)[:1200]}"
 
 
-def _batch_evidence(evidence_items: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+def _prefilter_evidence(
+    evidence_items: list[dict[str, Any]],
+    *,
+    min_chars: int,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    kept: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    dropped_duplicate = 0
+    dropped_low_signal = 0
+    for evidence in evidence_items:
+        text = _evidence_text(evidence)
+        stripped = text.strip()
+        if not stripped or (min_chars > 0 and len(stripped) < min_chars):
+            dropped_low_signal += 1
+            continue
+        norm = _normalize_key(text)
+        if norm in seen:
+            dropped_duplicate += 1
+            continue
+        seen.add(norm)
+        kept.append(evidence)
+    return kept, {
+        "original": len(evidence_items),
+        "kept": len(kept),
+        "dropped_duplicate": dropped_duplicate,
+        "dropped_low_signal": dropped_low_signal,
+    }
+
+
+def _batch_evidence(
+    evidence_items: list[dict[str, Any]],
+    *,
+    max_items: int | None = None,
+    max_chars: int | None = None,
+) -> list[list[dict[str, Any]]]:
+    max_items = max_items or settings.extract_batch_max_items
+    max_chars = max_chars or settings.extract_batch_max_chars
     batches: list[list[dict[str, Any]]] = []
     current: list[dict[str, Any]] = []
     current_chars = 0
     for evidence in evidence_items:
         size = len(_format_evidence_for_prompt(evidence))
-        if current and (len(current) >= BATCH_MAX_ITEMS or current_chars + size > BATCH_MAX_CHARS):
+        if current and (len(current) >= max_items or current_chars + size > max_chars):
             batches.append(current)
             current = []
             current_chars = 0
@@ -503,8 +539,19 @@ class IntelligenceExtractSkill:
             raw = result.model_dump(mode="json")
             return _sanitize_extraction(raw, batch)
 
-        batches = _batch_evidence(evidence_items)
         warnings: list[str] = []
+        filtered_items, prefilter_stats = _prefilter_evidence(
+            evidence_items,
+            min_chars=settings.extract_min_evidence_chars,
+        )
+        if prefilter_stats["dropped_duplicate"] + prefilter_stats["dropped_low_signal"] > 0:
+            warnings.append(
+                "为节省真实模型调用，已跳过 "
+                f"{prefilter_stats['dropped_duplicate']} 条重复证据、"
+                f"{prefilter_stats['dropped_low_signal']} 条空白/过短证据"
+                f"（原 {prefilter_stats['original']} 条 → 实际抽取 {prefilter_stats['kept']} 条）"
+            )
+        batches = _batch_evidence(filtered_items)
         total = len(batches)
         done = 0
         executor = ThreadPoolExecutor(max_workers=settings.extract_concurrency)

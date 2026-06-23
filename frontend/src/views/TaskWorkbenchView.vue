@@ -151,7 +151,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { useRoute } from "vue-router";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 
 import { apiClient } from "@/api/client";
 import ConflictPanel from "@/components/ConflictPanel.vue";
@@ -381,14 +381,17 @@ async function refreshResults() {
   await Promise.all([loadEvidence(), loadResults()]);
 }
 
-async function startAnalysis() {
+async function startAnalysis(confirmLarge = false) {
   if (!task.value) {
     return;
   }
   analysisStarting.value = true;
   errorMessage.value = "";
   try {
-    const response = await apiClient.post<{ data: { run_id: string; status: string } }>(`/tasks/${task.value.id}/runs`);
+    const response = await apiClient.post<{ data: { run_id: string; status: string } }>(
+      `/tasks/${task.value.id}/runs`,
+      { confirm_large: confirmLarge === true }
+    );
     const newRunId = response.data.data.run_id;
     selectedRunId.value = newRunId;
     latestRun.value = {
@@ -407,6 +410,21 @@ async function startAnalysis() {
     await loadRuns(newRunId);
     startPolling();
   } catch (error) {
+    const detail = (error as { response?: { data?: { detail?: { code?: string; message?: string } } } }).response?.data
+      ?.detail;
+    if (detail?.code === "RUN_TOO_LARGE") {
+      try {
+        await ElMessageBox.confirm(
+          detail.message,
+          "确认大额分析",
+          { confirmButtonText: "仍要继续", cancelButtonText: "取消", type: "warning" }
+        );
+        await startAnalysis(true);
+      } catch {
+        // 用户取消确认时不提示错误。
+      }
+      return;
+    }
     ElMessage.error(extractErrorMessage(error, "启动分析失败"));
   } finally {
     analysisStarting.value = false;

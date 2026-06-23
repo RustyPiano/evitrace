@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from urllib.parse import unquote
 
+import pytest
+
 from app.constants import (
     RUN_STATUS_FAILED,
     RUN_STATUS_QUEUED,
@@ -13,6 +15,7 @@ from app.constants import (
 )
 from app.database import SessionLocal
 from app.models import AnalysisResult, AuditLog, Evidence, SkillConfig, Task, TaskFile, TaskRun
+from app.schemas import AppError
 from app.services import orchestrator
 from app.skills.base import RunCancelled
 
@@ -46,6 +49,26 @@ def _upload_text(client, headers, task_id: str) -> str:
     )
     assert response.status_code == 201
     return response.json()["data"][0]["id"]
+
+
+def _upload_texts(client, headers, task_id: str, count: int) -> list[str]:
+    response = client.post(
+        f"/api/v1/tasks/{task_id}/files",
+        headers=headers,
+        files=[
+            (
+                "files",
+                (
+                    f"note-{index}.txt",
+                    f"6月1日14:00，车队在地点{index}发现{index}辆车。".encode(),
+                    "text/plain",
+                ),
+            )
+            for index in range(1, count + 1)
+        ],
+    )
+    assert response.status_code == 201
+    return [item["id"] for item in response.json()["data"]]
 
 
 def _admin_create_analyst(client, admin_headers, username: str) -> None:
@@ -197,6 +220,73 @@ def test_start_run_rejects_when_any_task_is_running(client, create_user):
 
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "TASK_ALREADY_RUNNING"
+
+
+def test_start_run_large_file_guard_requires_confirmation(client, create_user, monkeypatch):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    _upload_texts(client, headers, task_id, 2)
+    monkeypatch.setattr(orchestrator.settings, "extract_max_files_confirm", 1, raising=False)
+
+    with SessionLocal() as db:
+        owner = db.query(Task).filter(Task.id == task_id).one().owner
+        with pytest.raises(AppError) as exc_info:
+            orchestrator.start_run(db, task_id, owner)
+
+    assert exc_info.value.code == "RUN_TOO_LARGE"
+    assert exc_info.value.http_status == 409
+
+    with SessionLocal() as db:
+        owner = db.query(Task).filter(Task.id == task_id).one().owner
+        run = orchestrator.start_run(db, task_id, owner, confirm_large=True)
+        assert run.status == RUN_STATUS_QUEUED
+
+
+def test_start_run_large_file_guard_allows_disabled_or_below_threshold(client, create_user, monkeypatch):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    disabled_task_id = _create_task(client, headers, "Disabled guard")
+    below_task_id = _create_task(client, headers, "Below guard")
+    _upload_texts(client, headers, disabled_task_id, 2)
+    _upload_texts(client, headers, below_task_id, 2)
+
+    monkeypatch.setattr(orchestrator.settings, "extract_max_files_confirm", 0, raising=False)
+    with SessionLocal() as db:
+        owner = db.query(Task).filter(Task.id == disabled_task_id).one().owner
+        run = orchestrator.start_run(db, disabled_task_id, owner)
+        assert run.status == RUN_STATUS_QUEUED
+        run.status = RUN_STATUS_FAILED
+        db.get(Task, disabled_task_id).status = "ready"
+        db.commit()
+
+    monkeypatch.setattr(orchestrator.settings, "extract_max_files_confirm", 2, raising=False)
+    with SessionLocal() as db:
+        owner = db.query(Task).filter(Task.id == below_task_id).one().owner
+        run = orchestrator.start_run(db, below_task_id, owner)
+        assert run.status == RUN_STATUS_QUEUED
+
+
+def test_start_analysis_run_large_file_guard_body_contract(client, create_user, monkeypatch):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    _upload_texts(client, headers, task_id, 2)
+    monkeypatch.setattr(orchestrator.settings, "extract_max_files_confirm", 1, raising=False)
+
+    rejected = client.post(f"/api/v1/tasks/{task_id}/runs", headers=headers)
+
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"]["code"] == "RUN_TOO_LARGE"
+
+    accepted = client.post(
+        f"/api/v1/tasks/{task_id}/runs",
+        headers=headers,
+        json={"confirm_large": True},
+    )
+
+    assert accepted.status_code == 202
+    assert accepted.json()["data"]["status"] == "queued"
 
 
 def test_cancel_run_marks_latest_running_run_and_records_audit(client, create_user):

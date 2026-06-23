@@ -9,7 +9,9 @@ from app.skills.base import RunCancelled
 from app.skills.base import SkillContext
 from app.skills.intelligence_extract import (
     IntelligenceExtractSkill,
+    _batch_evidence,
     _merge_extractions,
+    _prefilter_evidence,
     _sanitize_extraction,
     build_timeline,
 )
@@ -91,6 +93,39 @@ def test_extraction_fails_clearly_when_evidence_is_empty(tmp_path):
 
     assert result.success is False
     assert result.errors == ["没有可用于要素提取的证据"]
+
+
+def test_prefilter_evidence_drops_blank_short_and_duplicate_while_preserving_order():
+    evidence = [
+        {"display_id": "E-0001", "content": "  Alpha  "},
+        {"display_id": "E-0002", "content": "   "},
+        {"display_id": "E-0003", "content": "alpha"},
+        {"display_id": "E-0004", "content": "ab"},
+        {"display_id": "E-0005", "content": "Beta"},
+    ]
+
+    kept, stats = _prefilter_evidence(evidence, min_chars=3)
+
+    assert [item["display_id"] for item in kept] == ["E-0001", "E-0005"]
+    assert stats == {
+        "original": 5,
+        "kept": 2,
+        "dropped_duplicate": 1,
+        "dropped_low_signal": 2,
+    }
+
+
+def test_batch_evidence_uses_explicit_or_configured_limits(monkeypatch):
+    evidence = _many_evidence(5)
+
+    assert [len(batch) for batch in _batch_evidence(evidence, max_items=2, max_chars=12000)] == [2, 2, 1]
+
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_batch_max_items", 3, raising=False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_batch_max_chars", 12000, raising=False)
+
+    assert [len(batch) for batch in _batch_evidence(evidence)] == [3, 2]
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_batch_max_items", 30, raising=False)
+    assert [len(batch) for batch in _batch_evidence(_many_evidence(31))] == [30, 1]
 
 
 def test_task_fixture_can_resolve_match_to_display_id_and_ignore_extra_fields(tmp_path):
@@ -330,6 +365,105 @@ def test_real_extraction_prompt_includes_schema_example_and_empty_warning(monkey
     assert "只输出 JSON" in system_prompt
     assert "[E-0001]" in user_prompt
     assert "[E-0002]" in user_prompt
+
+
+def test_real_extraction_prefilters_before_batching_and_discloses_savings(monkeypatch, tmp_path):
+    calls: list[str] = []
+
+    class FakeClient:
+        def generate_json(self, _system, user, schema):
+            calls.append(user)
+            display_ids = re.findall(r"\[(E-\d{4})\]", user)
+            return schema.model_validate(
+                {
+                    "events": [
+                        {
+                            "event_key": f"分队-发现-{display_ids[0]}",
+                            "title": "发现车辆",
+                            "evidence_ids": [display_ids[0]],
+                        }
+                    ]
+                }
+            )
+
+    evidence = [
+        {
+            "display_id": "E-0001",
+            "content": "Alpha target",
+            "content_summary": "Alpha target",
+            "file": {"original_name": "a.txt"},
+            "locator": {"kind": "text"},
+        },
+        {
+            "display_id": "E-0002",
+            "content": " alpha target ",
+            "content_summary": " alpha target ",
+            "file": {"original_name": "b.txt"},
+            "locator": {"kind": "text"},
+        },
+        {
+            "display_id": "E-0003",
+            "content": "  ",
+            "content_summary": "  ",
+            "file": {"original_name": "c.txt"},
+            "locator": {"kind": "text"},
+        },
+        {
+            "display_id": "E-0004",
+            "content": "Beta target",
+            "content_summary": "Beta target",
+            "file": {"original_name": "d.txt"},
+            "locator": {"kind": "text"},
+        },
+    ]
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_min_evidence_chars", 0, raising=False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_batch_max_items", 1, raising=False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_batch_max_chars", 12000, raising=False)
+
+    result = IntelligenceExtractSkill(llm_client=FakeClient()).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "Analyze"}, "evidence": evidence},
+    )
+
+    assert result.success is True
+    assert len(calls) == 2
+    assert "[E-0001]" in calls[0]
+    assert "[E-0004]" in calls[1]
+    assert "[E-0002]" not in "\n".join(calls)
+    assert result.data["events"][0]["evidence_ids"] == ["E-0001"]
+    assert result.warnings == [
+        "为节省真实模型调用，已跳过 1 条重复证据、1 条空白/过短证据（原 4 条 → 实际抽取 2 条）"
+    ]
+
+
+def test_mock_extraction_does_not_prefilter_duplicate_evidence(monkeypatch, tmp_path):
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_min_evidence_chars", 100, raising=False)
+    evidence = [
+        {
+            "display_id": "E-0001",
+            "content": "same",
+            "content_summary": "same",
+            "file": {"original_name": "a.txt"},
+            "locator": {"kind": "text"},
+        },
+        {
+            "display_id": "E-0002",
+            "content": "same",
+            "content_summary": "same",
+            "file": {"original_name": "b.txt"},
+            "locator": {"kind": "text"},
+        },
+    ]
+
+    result = IntelligenceExtractSkill().run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "Analyze"}, "evidence": evidence},
+    )
+
+    assert result.success is True
+    assert {event["evidence_ids"][0] for event in result.data["events"]} == {"E-0001", "E-0002"}
+    assert result.warnings == []
 
 
 def test_real_extraction_runs_batches_concurrently_and_reports_progress(monkeypatch, tmp_path):
