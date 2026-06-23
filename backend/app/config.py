@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     extract_batch_max_chars: int = Field(default=12000, validation_alias="EXTRACT_BATCH_MAX_CHARS")
     extract_min_evidence_chars: int = Field(default=0, validation_alias="EXTRACT_MIN_EVIDENCE_CHARS")
     extract_max_files_confirm: int = Field(default=20, validation_alias="EXTRACT_MAX_FILES_CONFIRM")
+    extract_rate_limit_cooldown_sec: float = Field(
+        default=5.0, validation_alias="EXTRACT_RATE_LIMIT_COOLDOWN_SEC"
+    )
+    extract_rate_limit_circuit_breaker: int = Field(
+        default=8, validation_alias="EXTRACT_RATE_LIMIT_CIRCUIT_BREAKER"
+    )
     mock_ai: bool = Field(default=True, validation_alias="MOCK_AI")
     mock_llm: bool | None = Field(default=None, validation_alias="MOCK_LLM")
     mock_media: bool | None = Field(default=None, validation_alias="MOCK_MEDIA")
@@ -146,6 +152,16 @@ class Settings(BaseSettings):
     @classmethod
     def clamp_extract_max_files_confirm(cls, value: int) -> int:
         return min(max(value, 0), 100000)
+
+    @field_validator("extract_rate_limit_cooldown_sec")
+    @classmethod
+    def clamp_extract_rate_limit_cooldown_sec(cls, value: float) -> float:
+        return min(max(value, 0.0), 120.0)
+
+    @field_validator("extract_rate_limit_circuit_breaker")
+    @classmethod
+    def clamp_extract_rate_limit_circuit_breaker(cls, value: int) -> int:
+        return min(max(value, 0), 1000)
 
     @field_validator(
         "ocr_base_url",

@@ -413,17 +413,20 @@ def execute_run(task_id: str, run_id: str) -> None:
 
             _update_state(db, task, run, task_status=TASK_STATUS_EXTRACTING, progress=55, current_step="extracting")
             context = SkillContext(task_id=task.id, run_id=run.id, data_root=str(settings.data_root_path))
-            def extract_progress(done: int, total: int) -> None:
-                progress = min(70, 55 + int(15 * done / max(total, 1)))
-                failed = run.failed_batches
-                suffix = f" failed {failed}" if failed else ""
+            def extract_progress(done: int, failed: int, total: int) -> None:
+                processed = done + failed
+                progress = min(70, 55 + int(15 * processed / max(total, 1)))
+                run.total_batches = total
+                run.done_batches = done
+                run.failed_batches = failed
+                suffix = f" 失败{failed}" if failed else ""
                 _update_state(
                     db,
                     task,
                     run,
                     task_status=TASK_STATUS_EXTRACTING,
                     progress=progress,
-                    current_step=f"extracting {done}/{total}{suffix}",
+                    current_step=f"extracting {processed}/{total}{suffix}",
                 )
 
             extract_result = IntelligenceExtractSkill().run(
@@ -443,6 +446,7 @@ def execute_run(task_id: str, run_id: str) -> None:
             batch_total = int(extract_result.metrics.get("batch_total") or 0)
             batch_done = int(extract_result.metrics.get("batch_done") or 0)
             batch_failed = int(extract_result.metrics.get("batch_failed") or 0)
+            batch_aborted = bool(extract_result.metrics.get("batch_aborted"))
             run.total_batches = batch_total
             run.done_batches = batch_done
             run.failed_batches = batch_failed
@@ -455,7 +459,7 @@ def execute_run(task_id: str, run_id: str) -> None:
                     "全部抽取批次失败，可在工作台续跑",
                     status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
-            run.resumable = batch_failed > 0 and batch_done > 0
+            run.resumable = batch_done > 0 and (batch_failed > 0 or batch_aborted)
             db.commit()
             entities = extract_result.data["entities"]
             events = extract_result.data["events"]

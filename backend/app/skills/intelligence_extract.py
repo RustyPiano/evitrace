@@ -1,5 +1,6 @@
 import json
 from hashlib import sha256
+import time as time_lib
 import unicodedata
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
@@ -396,7 +397,7 @@ class IntelligenceExtractSkill:
         self,
         context: SkillContext,
         payload: Any,
-        progress_callback: Callable[[int, int], None] | None = None,
+        progress_callback: Callable[[int, int, int], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
         persistence: ExtractionPersistence | None = None,
     ) -> SkillResult:
@@ -411,7 +412,7 @@ class IntelligenceExtractSkill:
                 raw = _load_fixture(context) or _default_mock_raw(evidence_items)
                 extraction, sanitize_warnings = _sanitize_extraction(raw, evidence_items)
                 warnings.extend(sanitize_warnings)
-                stats = {"total": 1, "done": 1, "failed": 0}
+                stats = {"total": 1, "done": 1, "failed": 0, "aborted": False}
             else:
                 extraction, real_warnings, stats = self._run_real_extraction(
                     payload,
@@ -448,6 +449,7 @@ class IntelligenceExtractSkill:
                 "batch_total": stats["total"],
                 "batch_done": stats["done"],
                 "batch_failed": stats["failed"],
+                "batch_aborted": stats["aborted"],
             },
         )
 
@@ -455,10 +457,12 @@ class IntelligenceExtractSkill:
         self,
         payload: Any,
         evidence_items: list[dict[str, Any]],
-        progress_callback: Callable[[int, int], None] | None = None,
+        progress_callback: Callable[[int, int, int], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
         persistence: ExtractionPersistence | None = None,
-    ) -> tuple[ExtractionResult, list[str], dict[str, int]]:
+        sleep_fn: Callable[[float], None] = time_lib.sleep,
+        monotonic_fn: Callable[[], float] = time_lib.monotonic,
+    ) -> tuple[ExtractionResult, list[str], dict[str, int | bool]]:
         client = self.llm_client or LocalLLMClient()
         task = payload.get("task") or {}
         system_prompt = (
@@ -591,7 +595,11 @@ class IntelligenceExtractSkill:
         if persistence is not None:
             persistence.set_plan(total, estimated_input_tokens)
             done_map = persistence.load_done()
-        done = 0
+        processed_done = 0
+        processed_failed = 0
+        consecutive_rate_limited = 0
+        cooldown_until = 0.0
+        aborted = False
         executor = ThreadPoolExecutor(max_workers=settings.extract_concurrency)
         pending: set[Future[tuple[ExtractionResult, list[str]]]] = set()
         fut_index: dict[Future[tuple[ExtractionResult, list[str]]], int] = {}
@@ -603,13 +611,16 @@ class IntelligenceExtractSkill:
             if cached is None or cached[0] != input_hash:
                 continue
             results[index] = ExtractionResult.model_validate(cached[1])
-            done += 1
+            processed_done += 1
             if progress_callback is not None:
-                progress_callback(done, total)
+                progress_callback(processed_done, processed_failed, total)
+
+        def can_submit() -> bool:
+            return not aborted and monotonic_fn() >= cooldown_until
 
         def submit_until_window_full() -> None:
             nonlocal next_idx
-            while len(pending) < settings.extract_concurrency and next_idx < total:
+            while len(pending) < settings.extract_concurrency and next_idx < total and can_submit():
                 if next_idx in results:
                     next_idx += 1
                     continue
@@ -622,8 +633,25 @@ class IntelligenceExtractSkill:
 
         try:
             submit_until_window_full()
-            while pending:
-                completed, pending = wait(pending, return_when=FIRST_COMPLETED)
+            while pending or (next_idx < total and not aborted):
+                # 顶部检查取消：即使所有在飞批都卡住（最坏到 LLM_TIMEOUT_SEC），
+                # 也能在 ~0.5s 内响应取消，而不必等某个批次完成。
+                if cancel_check is not None and cancel_check():
+                    raise RunCancelled()
+                if not pending:
+                    if not can_submit():
+                        remaining = cooldown_until - monotonic_fn()
+                        if remaining > 0:
+                            sleep_fn(min(0.5, remaining))
+                            continue
+                    submit_until_window_full()
+                    if not pending:
+                        break
+                    continue
+                # 带超时收集：周期性醒来以复查取消（in-flight 批可能长时间不完成）。
+                completed, pending = wait(pending, timeout=0.5, return_when=FIRST_COMPLETED)
+                if not completed:
+                    continue
                 for future in completed:
                     index = fut_index.pop(future)
                     try:
@@ -631,8 +659,8 @@ class IntelligenceExtractSkill:
                     except RunCancelled:
                         raise
                     except Exception as exc:
+                        error_code = exc.code if isinstance(exc, AppError) else type(exc).__name__
                         if persistence is not None:
-                            error_code = exc.code if isinstance(exc, AppError) else type(exc).__name__
                             persistence.record_batch(
                                 index,
                                 input_hashes[index],
@@ -641,6 +669,23 @@ class IntelligenceExtractSkill:
                                 error_code,
                                 str(exc)[:500],
                             )
+                        processed_failed += 1
+                        if error_code == "LLM_RATE_LIMITED":
+                            consecutive_rate_limited += 1
+                            wait_s = (
+                                getattr(exc, "retry_after", None)
+                                or settings.extract_rate_limit_cooldown_sec
+                            )
+                            cooldown_until = max(cooldown_until, monotonic_fn() + wait_s)
+                            if (
+                                settings.extract_rate_limit_circuit_breaker > 0
+                                and consecutive_rate_limited >= settings.extract_rate_limit_circuit_breaker
+                            ):
+                                aborted = True
+                        else:
+                            consecutive_rate_limited = 0
+                        if progress_callback is not None:
+                            progress_callback(processed_done, processed_failed, total)
                         continue
                     results[index] = sanitized
                     warnings.extend(sanitize_warnings)
@@ -653,9 +698,10 @@ class IntelligenceExtractSkill:
                             None,
                             None,
                         )
-                    done += 1
+                    consecutive_rate_limited = 0
+                    processed_done += 1
                     if progress_callback is not None:
-                        progress_callback(done, total)
+                        progress_callback(processed_done, processed_failed, total)
                 if cancel_check is not None and cancel_check():
                     raise RunCancelled()
                 submit_until_window_full()
@@ -664,11 +710,22 @@ class IntelligenceExtractSkill:
         extractions = [results[index] for index in sorted(results)]
         merged = _merge_extractions(extractions)
         done_count = len(results)
-        failed_count = total - done_count
+        failed_count = processed_failed
+        if aborted:
+            warnings.append(
+                "上游持续限流，已停止提交剩余批次"
+                f"（已完成 {done_count} 批、失败 {failed_count} 批，共 {total} 批；"
+                "请降低并发/减少证据后在工作台『继续分析』续跑）"
+            )
         if failed_count > 0:
             warnings.append(
                 f"部分抽取失败：{done_count}/{total} 批成功、{failed_count} 批失败（可在工作台『继续分析』续跑补齐）"
             )
         if not merged.entities and not merged.events:
             warnings.append("真实模型未抽取到任何要素，请检查模型/提示词")
-        return merged, warnings, {"total": total, "done": done_count, "failed": failed_count}
+        return merged, warnings, {
+            "total": total,
+            "done": done_count,
+            "failed": failed_count,
+            "aborted": aborted,
+        }

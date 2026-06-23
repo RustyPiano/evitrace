@@ -96,6 +96,8 @@ def test_extract_cost_controls_are_clamped_to_supported_ranges():
         EXTRACT_BATCH_MAX_CHARS=999,
         EXTRACT_MIN_EVIDENCE_CHARS=-1,
         EXTRACT_MAX_FILES_CONFIRM=-1,
+        EXTRACT_RATE_LIMIT_COOLDOWN_SEC=-1.0,
+        EXTRACT_RATE_LIMIT_CIRCUIT_BREAKER=-1,
     )
     too_high = Settings(
         SECRET_KEY="x" * 32,
@@ -104,16 +106,22 @@ def test_extract_cost_controls_are_clamped_to_supported_ranges():
         EXTRACT_BATCH_MAX_CHARS=999999,
         EXTRACT_MIN_EVIDENCE_CHARS=9999,
         EXTRACT_MAX_FILES_CONFIRM=999999,
+        EXTRACT_RATE_LIMIT_COOLDOWN_SEC=999.0,
+        EXTRACT_RATE_LIMIT_CIRCUIT_BREAKER=9999,
     )
 
     assert too_low.extract_batch_max_items == 1
     assert too_low.extract_batch_max_chars == 1000
     assert too_low.extract_min_evidence_chars == 0
     assert too_low.extract_max_files_confirm == 0
+    assert too_low.extract_rate_limit_cooldown_sec == 0.0
+    assert too_low.extract_rate_limit_circuit_breaker == 0
     assert too_high.extract_batch_max_items == 500
     assert too_high.extract_batch_max_chars == 120000
     assert too_high.extract_min_evidence_chars == 2000
     assert too_high.extract_max_files_confirm == 100000
+    assert too_high.extract_rate_limit_cooldown_sec == 120.0
+    assert too_high.extract_rate_limit_circuit_breaker == 1000
 
 
 def test_llm_retry_backoff_settings_are_clamped_to_supported_ranges():

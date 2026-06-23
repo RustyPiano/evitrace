@@ -536,20 +536,20 @@ def test_real_extraction_runs_batches_concurrently_and_reports_progress(monkeypa
                 }
             )
 
-    progress: list[tuple[int, int]] = []
+    progress: list[tuple[int, int, int]] = []
     monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
     monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_concurrency", 3, raising=False)
 
     result = IntelligenceExtractSkill(llm_client=FakeClient()).run(
         _context(tmp_path),
         {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _many_evidence(95)},
-        progress_callback=lambda done, total: progress.append((done, total)),
+        progress_callback=lambda done, failed, total: progress.append((done, failed, total)),
     )
 
     assert result.success is True
     assert len(result.data["events"]) == 4
     assert max_active > 1
-    assert progress == [(1, 4), (2, 4), (3, 4), (4, 4)]
+    assert progress == [(1, 0, 4), (2, 0, 4), (3, 0, 4), (4, 0, 4)]
 
 
 def test_real_extraction_keeps_batch_order_when_batches_finish_out_of_order(monkeypatch, tmp_path):
@@ -618,7 +618,7 @@ def test_real_extraction_cancels_pending_batches_and_propagates_run_cancelled(mo
                 }
             )
 
-    progress: list[tuple[int, int]] = []
+    progress: list[tuple[int, int, int]] = []
     monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
     monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_concurrency", 2, raising=False)
 
@@ -626,12 +626,181 @@ def test_real_extraction_cancels_pending_batches_and_propagates_run_cancelled(mo
         IntelligenceExtractSkill(llm_client=FakeClient()).run(
             _context(tmp_path),
             {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _many_evidence(95)},
-            progress_callback=lambda done, total: progress.append((done, total)),
+            progress_callback=lambda done, failed, total: progress.append((done, failed, total)),
             cancel_check=lambda: len(progress) >= 1,
         )
 
-    assert progress == [(1, 4)]
+    assert progress == [(1, 0, 4)]
     assert call_count <= progress[-1][0] + 2
+
+
+def test_real_extraction_progress_advances_for_success_and_failed_batches(monkeypatch, tmp_path):
+    class FakeClient:
+        def generate_json(self, _system, user, schema):
+            display_id = re.search(r"\[(E-\d{4})\]", user).group(1)
+            if display_id == "E-0002":
+                raise RuntimeError("boom")
+            return schema.model_validate(
+                {
+                    "events": [
+                        {
+                            "event_key": f"分队-发现-{display_id}",
+                            "title": "发现车辆",
+                            "evidence_ids": [display_id],
+                        }
+                    ]
+                }
+            )
+
+    progress: list[tuple[int, int, int]] = []
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_batch_max_items", 1, raising=False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_concurrency", 1, raising=False)
+
+    result = IntelligenceExtractSkill(llm_client=FakeClient()).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _evidence()},
+        progress_callback=lambda done, failed, total: progress.append((done, failed, total)),
+    )
+
+    assert result.success is True
+    assert progress == [(1, 0, 2), (1, 1, 2)]
+    assert progress[-1][0] + progress[-1][1] == progress[-1][2]
+    assert result.metrics["batch_done"] == 1
+    assert result.metrics["batch_failed"] == 1
+
+
+def test_real_extraction_prefilled_done_batches_report_progress_with_failed_zero(monkeypatch, tmp_path):
+    progress: list[tuple[int, int, int]] = []
+
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+    persistence = FakePersistence()
+
+    class FakeClient:
+        def generate_json(self, _system, user, schema):
+            display_id = re.search(r"\[(E-\d{4})\]", user).group(1)
+            return schema.model_validate({"events": [{"event_key": display_id, "title": display_id, "evidence_ids": [display_id]}]})
+
+    skill = IntelligenceExtractSkill(llm_client=FakeClient())
+    first = skill.run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _evidence()[:1]},
+        persistence=persistence,
+    )
+    assert first.success is True
+
+    result = skill.run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _evidence()[:1]},
+        persistence=persistence,
+        progress_callback=lambda done, failed, total: progress.append((done, failed, total)),
+    )
+
+    assert result.success is True
+    assert progress == [(1, 0, 1)]
+
+
+def test_real_extraction_global_rate_limit_cooldown_delays_new_submissions(monkeypatch, tmp_path):
+    submit_times: list[float] = []
+    now = 0.0
+
+    def monotonic_fn() -> float:
+        return now
+
+    def sleep_fn(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    class FakeClient:
+        def generate_json(self, _system, user, schema):
+            display_id = re.search(r"\[(E-\d{4})\]", user).group(1)
+            submit_times.append(monotonic_fn())
+            if display_id == "E-0001":
+                exc = AppError("LLM_RATE_LIMITED", "too many requests", status.HTTP_429_TOO_MANY_REQUESTS)
+                exc.retry_after = 2.0
+                raise exc
+            return schema.model_validate(
+                {"events": [{"event_key": display_id, "title": display_id, "evidence_ids": [display_id]}]}
+            )
+
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_batch_max_items", 1, raising=False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_concurrency", 1, raising=False)
+
+    _merged, _warnings, stats = IntelligenceExtractSkill(llm_client=FakeClient())._run_real_extraction(
+        {"task": {"name": "Case", "objective": "Analyze"}},
+        _evidence(),
+        sleep_fn=sleep_fn,
+        monotonic_fn=monotonic_fn,
+    )
+
+    assert stats == {"total": 2, "done": 1, "failed": 1, "aborted": False}
+    assert submit_times == [0.0, 2.0]
+
+
+def test_real_extraction_rate_limit_circuit_breaker_stops_unsubmitted_batches(monkeypatch, tmp_path):
+    call_count = 0
+
+    class FakeClient:
+        def generate_json(self, _system, _user, _schema):
+            nonlocal call_count
+            call_count += 1
+            raise AppError("LLM_RATE_LIMITED", "too many requests", status.HTTP_429_TOO_MANY_REQUESTS)
+
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_batch_max_items", 1, raising=False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_concurrency", 1, raising=False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_rate_limit_circuit_breaker", 2, raising=False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_rate_limit_cooldown_sec", 0, raising=False)
+
+    result = IntelligenceExtractSkill(llm_client=FakeClient()).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _many_evidence(5)},
+    )
+
+    assert result.success is True
+    assert call_count == 2
+    assert result.metrics["batch_total"] == 5
+    assert result.metrics["batch_done"] == 0
+    assert result.metrics["batch_failed"] == 2
+    assert result.metrics["batch_aborted"] is True
+    assert result.metrics["batch_done"] + result.metrics["batch_failed"] < result.metrics["batch_total"]
+    assert any("上游持续限流，已停止提交剩余批次" in warning for warning in result.warnings)
+
+
+def test_real_extraction_cancel_check_runs_during_rate_limit_cooldown(monkeypatch, tmp_path):
+    now = 0.0
+    sleep_calls = 0
+
+    def monotonic_fn() -> float:
+        return now
+
+    def sleep_fn(_seconds: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+
+    def cancel_check() -> bool:
+        return sleep_calls >= 1
+
+    class FakeClient:
+        def generate_json(self, _system, _user, _schema):
+            exc = AppError("LLM_RATE_LIMITED", "too many requests", status.HTTP_429_TOO_MANY_REQUESTS)
+            exc.retry_after = 2.0
+            raise exc
+
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_batch_max_items", 1, raising=False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_concurrency", 1, raising=False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_rate_limit_circuit_breaker", 0, raising=False)
+
+    with pytest.raises(RunCancelled):
+        IntelligenceExtractSkill(llm_client=FakeClient())._run_real_extraction(
+            {"task": {"name": "Case", "objective": "Analyze"}},
+            _evidence(),
+            cancel_check=cancel_check,
+            sleep_fn=sleep_fn,
+            monotonic_fn=monotonic_fn,
+        )
 
 
 def test_real_extraction_persists_partial_results_and_resumes_only_failed_batch(monkeypatch, tmp_path):

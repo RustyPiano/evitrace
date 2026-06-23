@@ -644,7 +644,7 @@ def test_execute_run_all_failed_extraction_marks_resumable_without_result(client
                 success=True,
                 warnings=["部分抽取失败：0/1 批成功、1 批失败（可在工作台『继续分析』续跑补齐）"],
                 data={"entities": [], "events": [], "timeline": []},
-                metrics={"batch_total": 1, "batch_done": 0, "batch_failed": 1},
+                metrics={"batch_total": 1, "batch_done": 0, "batch_failed": 1, "batch_aborted": True},
             )
 
     monkeypatch.setattr(orchestrator.parse_service, "parse_all_files", fake_parse)
@@ -661,6 +661,75 @@ def test_execute_run_all_failed_extraction_marks_resumable_without_result(client
         assert run.failed_batches == 1
         assert run.error_message == "全部抽取批次失败，可在工作台续跑"
         assert db.query(AnalysisResult).filter(AnalysisResult.run_id == run_id).count() == 0
+
+
+def test_execute_run_aborted_partial_extraction_keeps_partial_result_resumable(client, create_user, monkeypatch):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    file_id = _upload_text(client, headers, task_id)
+    with SessionLocal() as db:
+        owner = db.query(Task).filter(Task.id == task_id).one().owner
+        run = orchestrator.start_run(db, task_id, owner)
+        run_id = run.id
+
+    def fake_parse(_task_id: str, run_id: str | None = None, **_kwargs):
+        with SessionLocal() as db:
+            db.add(
+                Evidence(
+                    display_id="E-0001",
+                    task_id=_task_id,
+                    run_id=run_id,
+                    file_id=file_id,
+                    modality="text",
+                    evidence_type="paragraph",
+                    content="6月1日14:00，车队在地点A发现3辆车。",
+                    locator_json="{}",
+                    skill_id="document_parse",
+                )
+            )
+            db.commit()
+        return orchestrator.parse_service.ParseSummary(task_id=_task_id, run_id=run_id)
+
+    class PartialAbortedExtract:
+        def run(self, _context, _payload, progress_callback=None, **_kwargs):
+            if progress_callback is not None:
+                progress_callback(1, 1, 3)
+            return SkillResult(
+                success=True,
+                warnings=["上游持续限流，已停止提交剩余批次（已完成 1 批、失败 1 批，共 3 批；请降低并发/减少证据后在工作台『继续分析』续跑）"],
+                data={
+                    "entities": [],
+                    "events": [{"event_id": "EVT-001", "event_key": "车队-发现-车辆", "title": "发现车辆", "evidence_ids": ["E-0001"]}],
+                    "timeline": [{"event_id": "EVT-001", "event_key": "车队-发现-车辆", "title": "发现车辆", "time_text": None, "time_normalized": None, "time_group": "时间未确定", "location": None, "time_evidence_ids": [], "evidence_ids": ["E-0001"]}],
+                },
+                metrics={"batch_total": 3, "batch_done": 1, "batch_failed": 1, "batch_aborted": True},
+            )
+
+    class NoConflicts:
+        def run(self, *_args, **_kwargs):
+            return SkillResult(success=True, data={"conflicts": []})
+
+    class Report:
+        def run(self, *_args, **_kwargs):
+            return SkillResult(success=True, data={"report_markdown": "partial", "citation_check": {"invalid_citations": []}})
+
+    monkeypatch.setattr(orchestrator.parse_service, "parse_all_files", fake_parse)
+    monkeypatch.setattr(orchestrator, "IntelligenceExtractSkill", PartialAbortedExtract)
+    monkeypatch.setattr(orchestrator, "ConflictDetectSkill", NoConflicts)
+    monkeypatch.setattr(orchestrator, "ReportGenerateSkill", Report)
+
+    orchestrator.execute_run(task_id, run_id)
+
+    with SessionLocal() as db:
+        run = db.get(TaskRun, run_id)
+        result_count = db.query(AnalysisResult).filter(AnalysisResult.run_id == run_id).count()
+        assert run.status == RUN_STATUS_SUCCEEDED
+        assert run.resumable is True
+        assert run.total_batches == 3
+        assert run.done_batches == 1
+        assert run.failed_batches == 1
+        assert result_count == 1
 
 
 def test_execute_run_reuses_existing_evidence_and_upserts_result_on_resume(client, create_user, monkeypatch):
