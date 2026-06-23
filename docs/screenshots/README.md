@@ -26,9 +26,12 @@ docker compose up -d --build      # 或本地：后端 uvicorn :8088 + 前端 np
 
 ## 建议补充（可选，增强完整度）
 
+- `run-history.png`：工作台顶部「分析版本」下拉——同一任务多次运行后可切换查看历史 run（重跑保留历史；已实现，见 §十一）。
+- `run-mode-badge.png`：顶栏运行模式徽章。演示=「演示Fixture」；配齐真实模型=「全真实链路」；部分真实=「混合模式」。鼠标悬停 tooltip 显示每个组件的「模型 · 本地/远程」（如 `LLM: deepseek-v4-flash · 远程`）——可佐证 §7.4 的云端/本机部署区分。
 - `admin-skills.png`：管理页 Skill 启停 + 健康状态。
 - `admin-audit.png`：管理页审计日志。
-- `run-history.png`：同一任务多次运行后的「历史运行」（重跑保留历史，可按 run 查看）。
+
+> 采集方式：本环境无可驱动的浏览器自动化（未连接 Chrome 扩展；computer-use 对浏览器为只读），因此截图为人工采集——按上面 30 秒流程跑一遍，逐个面板截图即可（约 2 分钟）。如需展示「全真实链路」徽章，先按 `docs/DEPLOYMENT.md` 配好云 LLM/VLM + 本机 OCR/ASR 再登录采集。
 
 ## 说明
 
