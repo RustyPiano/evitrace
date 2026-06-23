@@ -1,4 +1,5 @@
 import re
+from typing import Any
 
 from app.schemas_analysis import CitationCheck
 
@@ -11,6 +12,7 @@ FACT_SECTION_PATTERNS = [
     ("三、事件时间线", TIMELINE_HEADING_RE),
     ("四、主要冲突", CONFLICT_HEADING_RE),
 ]
+FIELD_CITATION_KEYS = ("time_citation", "location_citation", "quantity_citation")
 
 
 def ordered_unique(values: list[str]) -> list[str]:
@@ -41,6 +43,31 @@ def extract_conclusion_paragraphs(markdown: str) -> list[str]:
 def extract_fact_lines(markdown: str, heading_re: re.Pattern[str]) -> list[str]:
     body = extract_section_body(markdown, heading_re)
     return [line.strip() for line in body.splitlines() if line.strip()]
+
+
+def field_citation_stats(events: list[dict[str, Any]]) -> dict[str, int | float | None]:
+    total = 0
+    explicit = 0
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        for key in FIELD_CITATION_KEYS:
+            citation = event.get(key)
+            if not isinstance(citation, dict):
+                continue
+            if not citation.get("value"):
+                continue
+            total += 1
+            if citation.get("citation_origin") == "explicit":
+                explicit += 1
+
+    # None means there were no field-level citations to evaluate.
+    ratio = explicit / total if total else None
+    return {
+        "field_citation_total": total,
+        "field_citation_explicit": explicit,
+        "field_explicit_ratio": ratio,
+    }
 
 
 def validate_report_citations(markdown: str, valid_ids: set[str]) -> CitationCheck:

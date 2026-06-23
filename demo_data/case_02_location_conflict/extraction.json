@@ -34,7 +34,19 @@
         "unit": "crates"
       },
       "match": "Brief note: Echo team delivered 2 medical crates at North Pier at 09:15",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "09:15",
+        "match": "Brief note: Echo team delivered 2 medical crates at North Pier at 09:15"
+      },
+      "location_citation": {
+        "value": "North Pier",
+        "match": "Brief note: Echo team delivered 2 medical crates at North Pier at 09:15"
+      },
+      "quantity_citation": {
+        "value": "2 crates",
+        "match": "Brief note: Echo team delivered 2 medical crates at North Pier at 09:15"
+      }
     },
     {
       "event_key": "Echo-team-delivery",
@@ -50,7 +62,19 @@
         "unit": "crates"
       },
       "match": "Report check: The logistics sheet repeats North Pier as the delivery point",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "09:15",
+        "match": "Report check: The logistics sheet repeats North Pier as the delivery point"
+      },
+      "location_citation": {
+        "value": "North Pier",
+        "match": "Report check: The logistics sheet repeats North Pier as the delivery point"
+      },
+      "quantity_citation": {
+        "value": "2 crates",
+        "match": "Report check: The logistics sheet repeats North Pier as the delivery point"
+      }
     },
     {
       "event_key": "Echo-team-delivery",
@@ -66,7 +90,19 @@
         "unit": "crates"
       },
       "match": "Gate sign: Echo team delivery point East Warehouse, 2 crates, 09:15.",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "09:15",
+        "match": "Gate sign: Echo team delivery point East Warehouse, 2 crates, 09:15."
+      },
+      "location_citation": {
+        "value": "North Pier",
+        "match": "Gate sign: Echo team delivery point East Warehouse, 2 crates, 09:15."
+      },
+      "quantity_citation": {
+        "value": "2 crates",
+        "match": "Gate sign: Echo team delivery point East Warehouse, 2 crates, 09:15."
+      }
     },
     {
       "event_key": "Echo-team-delivery",
@@ -82,7 +118,19 @@
         "unit": "crates"
       },
       "match": "Radio transcript: Echo team confirms North Pier delivery point at 09:15.",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "09:15",
+        "match": "Radio transcript: Echo team confirms North Pier delivery point at 09:15."
+      },
+      "location_citation": {
+        "value": "East Warehouse",
+        "match": "Radio transcript: Echo team confirms North Pier delivery point at 09:15."
+      },
+      "quantity_citation": {
+        "value": "2 crates",
+        "match": "Radio transcript: Echo team confirms North Pier delivery point at 09:15."
+      }
     },
     {
       "event_key": "Echo-team-delivery",
@@ -98,7 +146,19 @@
         "unit": "crates"
       },
       "match": "Video audio: Echo team delivery point is East Warehouse.",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "09:15",
+        "match": "Video audio: Echo team delivery point is East Warehouse."
+      },
+      "location_citation": {
+        "value": "East Warehouse",
+        "match": "Video audio: Echo team delivery point is East Warehouse."
+      },
+      "quantity_citation": {
+        "value": "2 crates",
+        "match": "Video audio: Echo team delivery point is East Warehouse."
+      }
     },
     {
       "event_key": "Echo-team-delivery",
@@ -114,7 +174,19 @@
         "unit": "crates"
       },
       "match": "Video slate shows East Warehouse for Echo team.",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "09:15",
+        "match": "Video slate shows East Warehouse for Echo team."
+      },
+      "location_citation": {
+        "value": "East Warehouse",
+        "match": "Video slate shows East Warehouse for Echo team."
+      },
+      "quantity_citation": {
+        "value": "2 crates",
+        "match": "Video slate shows East Warehouse for Echo team."
+      }
     }
   ]
 }

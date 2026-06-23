@@ -58,6 +58,7 @@ export interface AnalysisEntity {
 export interface FieldCitation {
   value?: string | null;
   evidence_ids: string[];
+  citation_origin?: "explicit" | "fallback" | null;
 }
 
 export interface AnalysisQuantity {
@@ -97,6 +98,7 @@ export interface ConflictSide {
   value: string;
   event_id: string;
   evidence_ids: string[];
+  citation_origin?: "explicit" | "fallback" | null;
 }
 
 export interface AnalysisConflict {
@@ -119,6 +121,9 @@ export interface CitationCheck {
   cited_conclusion_paragraph_count?: number;
   uncited_sections?: string[];
   uncited_fact_count?: number;
+  field_citation_total?: number;
+  field_citation_explicit?: number;
+  field_explicit_ratio?: number | null;
 }
 
 export interface AnalysisResult {

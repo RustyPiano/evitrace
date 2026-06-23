@@ -158,11 +158,61 @@ def test_sanitize_field_citations_filters_invalid_ids_and_falls_back_to_event_id
 
     assert warnings == []
     event = extraction.events[0]
-    assert event.time_citation == FieldCitation(value="6月1日14:00", evidence_ids=["E-0002"])
-    assert event.location_citation == FieldCitation(value="地点A", evidence_ids=["E-0001", "E-0002"])
-    assert event.quantity_citation == FieldCitation(value="3 辆", evidence_ids=["E-0001", "E-0002"])
+    assert event.time_citation == FieldCitation(
+        value="6月1日14:00",
+        evidence_ids=["E-0002"],
+        citation_origin="explicit",
+    )
+    assert event.location_citation == FieldCitation(
+        value="地点A",
+        evidence_ids=["E-0001", "E-0002"],
+        citation_origin="fallback",
+    )
+    assert event.quantity_citation == FieldCitation(
+        value="3 辆",
+        evidence_ids=["E-0001", "E-0002"],
+        citation_origin="fallback",
+    )
     assert extraction.events[1].location_citation is None
     assert extraction.events[1].quantity_citation is None
+
+
+def test_sanitize_field_citations_ignore_model_value_and_mark_origin():
+    raw = {
+        "events": [
+            {
+                "event_key": "车队-发现-车辆",
+                "title": "发现车辆",
+                "time_text": "6月1日14:00",
+                "location": "地点A",
+                "quantity": {"value": 3, "unit": "辆"},
+                "evidence_ids": ["E-0001"],
+                "time_citation": {"value": "6月1日16:30", "evidence_ids": ["E-0002"]},
+                "location_citation": {"value": "地点B", "evidence_ids": []},
+                "quantity_citation": {"value": "5辆", "evidence_ids": ["E-9999"]},
+            }
+        ]
+    }
+
+    extraction, warnings = _sanitize_extraction(raw, _evidence())
+
+    assert warnings == []
+    event = extraction.events[0]
+    assert event.time_citation == FieldCitation(
+        value="6月1日14:00",
+        evidence_ids=["E-0002"],
+        citation_origin="explicit",
+    )
+    assert event.location_citation == FieldCitation(
+        value="地点A",
+        evidence_ids=["E-0001"],
+        citation_origin="fallback",
+    )
+    assert event.quantity_citation == FieldCitation(
+        value="3 辆",
+        evidence_ids=["E-0001"],
+        citation_origin="fallback",
+    )
 
 
 def test_sanitize_invalid_time_normalized_keeps_time_text_and_warns(tmp_path):
@@ -272,7 +322,7 @@ def test_merge_extractions_combines_evidence_ids_for_same_fact():
                 time_normalized="2026-06-01T14:00:00",
                 location="地点A",
                 evidence_ids=["E-0001"],
-                time_citation=FieldCitation(value="14:00", evidence_ids=["E-0001"]),
+                time_citation=FieldCitation(value="14:00", evidence_ids=["E-0001"], citation_origin="fallback"),
             )
         ]
     )
@@ -284,7 +334,11 @@ def test_merge_extractions_combines_evidence_ids_for_same_fact():
                 time_normalized="2026-06-01T14:00:00",
                 location="地点A",
                 evidence_ids=["E-0002", "E-0001"],
-                time_citation=FieldCitation(value="14:00", evidence_ids=["E-0002", "E-0001"]),
+                time_citation=FieldCitation(
+                    value="14:00",
+                    evidence_ids=["E-0002", "E-0001"],
+                    citation_origin="explicit",
+                ),
             )
         ]
     )
@@ -297,6 +351,7 @@ def test_merge_extractions_combines_evidence_ids_for_same_fact():
     assert merged.events[0].time_citation == FieldCitation(
         value="14:00",
         evidence_ids=["E-0001", "E-0002"],
+        citation_origin="explicit",
     )
 
 

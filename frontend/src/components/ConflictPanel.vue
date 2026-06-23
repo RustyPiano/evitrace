@@ -33,7 +33,18 @@
           <div class="conflict-side">
             <span>左侧</span>
             <strong>{{ conflict.left.value }}</strong>
-            <small>{{ conflict.left.event_id }}</small>
+            <small>
+              {{ conflict.left.event_id }}
+              <el-tag
+                v-if="conflict.left.citation_origin === 'fallback'"
+                size="small"
+                type="info"
+                effect="plain"
+                title="字段未提供显式证据，已使用事件级证据编号"
+              >
+                事件级回退
+              </el-tag>
+            </small>
             <div>
               <el-button
                 v-for="displayId in conflict.left.evidence_ids"
@@ -49,7 +60,18 @@
           <div class="conflict-side">
             <span>右侧</span>
             <strong>{{ conflict.right.value }}</strong>
-            <small>{{ conflict.right.event_id }}</small>
+            <small>
+              {{ conflict.right.event_id }}
+              <el-tag
+                v-if="conflict.right.citation_origin === 'fallback'"
+                size="small"
+                type="info"
+                effect="plain"
+                title="字段未提供显式证据，已使用事件级证据编号"
+              >
+                事件级回退
+              </el-tag>
+            </small>
             <div>
               <el-button
                 v-for="displayId in conflict.right.evidence_ids"

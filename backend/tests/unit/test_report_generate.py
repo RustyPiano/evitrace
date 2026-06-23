@@ -141,6 +141,25 @@ def test_report_metadata_is_inserted_after_notice_and_before_body(monkeypatch, t
     assert result.data["citation_check"]["citation_coverage"] == 1.0
 
 
+def test_report_citation_check_includes_field_explicit_ratio(tmp_path):
+    payload = _payload()
+    payload["events"] = [
+        {
+            "event_id": "EV-001",
+            "event_key": "convoy",
+            "title": "车队到达地点A",
+            "time_citation": {"value": "14:00", "evidence_ids": ["E-0001"], "citation_origin": "explicit"},
+            "location_citation": {"value": "地点A", "evidence_ids": ["E-0001"], "citation_origin": "fallback"},
+        }
+    ]
+
+    result = ReportGenerateSkill().run(_context(tmp_path), payload)
+
+    assert result.data["citation_check"]["field_citation_total"] == 2
+    assert result.data["citation_check"]["field_citation_explicit"] == 1
+    assert result.data["citation_check"]["field_explicit_ratio"] == 0.5
+
+
 def test_real_report_prompt_requires_exact_six_headings(monkeypatch, tmp_path):
     captured: dict[str, str] = {}
 

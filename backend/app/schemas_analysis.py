@@ -11,6 +11,7 @@ from app.constants import (
 EntityType = Literal["person", "organization", "location", "event", "object", "time", "quantity"]
 ConflictType = Literal["time", "location", "quantity"]
 ConflictStatus = Literal["unreviewed", "confirmed", "ignored"]
+CitationOrigin = Literal["explicit", "fallback"]
 
 
 class AnalysisBaseModel(BaseModel):
@@ -42,6 +43,7 @@ class Quantity(AnalysisBaseModel):
 class FieldCitation(AnalysisBaseModel):
     value: str | None = None
     evidence_ids: list[str] = Field(default_factory=list)
+    citation_origin: CitationOrigin | None = None
 
     @field_validator("value")
     @classmethod
@@ -109,6 +111,7 @@ class ConflictSide(AnalysisBaseModel):
     value: str
     event_id: str
     evidence_ids: list[str] = Field(min_length=1)
+    citation_origin: CitationOrigin | None = None
 
 
 class Conflict(AnalysisBaseModel):
@@ -131,6 +134,9 @@ class CitationCheck(AnalysisBaseModel):
     cited_conclusion_paragraph_count: int = 0
     uncited_sections: list[str] = Field(default_factory=list)
     uncited_fact_count: int = 0
+    field_citation_total: int = 0
+    field_citation_explicit: int = 0
+    field_explicit_ratio: float | None = None
 
 
 class ConflictStatusUpdate(BaseModel):

@@ -133,13 +133,12 @@ def _sanitize_field_citation(
     raw_citation = raw_event.get(field_name)
     if isinstance(raw_citation, dict):
         evidence_ids = _valid_evidence_ids(raw_citation, evidence_by_id)
-        value = str(raw_citation.get("value") or fallback_value).strip() or fallback_value
     else:
         evidence_ids = []
-        value = fallback_value
     return {
-        "value": value,
+        "value": fallback_value,
         "evidence_ids": evidence_ids or list(fallback_evidence_ids),
+        "citation_origin": "explicit" if evidence_ids else "fallback",
     }
 
 
@@ -287,6 +286,10 @@ def _merge_extractions(extractions: list[ExtractionResult]) -> ExtractionResult:
                     for evidence_id in event_citation.evidence_ids:
                         if evidence_id not in existing_citation.evidence_ids:
                             existing_citation.evidence_ids.append(evidence_id)
+                    if event_citation.citation_origin == "explicit":
+                        existing_citation.citation_origin = "explicit"
+                    elif existing_citation.citation_origin is None:
+                        existing_citation.citation_origin = event_citation.citation_origin
                 continue
             event.event_id = f"EVT-{len(events) + 1:03d}"
             event_by_key[key] = event

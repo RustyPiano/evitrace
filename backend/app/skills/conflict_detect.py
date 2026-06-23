@@ -59,7 +59,7 @@ def _group_event_key(group: list[dict[str, Any]]) -> str:
     return ""
 
 
-def _field_evidence_ids(event: dict[str, Any], conflict_type: str) -> list[str]:
+def _field_citation(event: dict[str, Any], conflict_type: str) -> dict[str, Any] | None:
     citation_key = {
         "time": "time_citation",
         "location": "location_citation",
@@ -68,18 +68,21 @@ def _field_evidence_ids(event: dict[str, Any], conflict_type: str) -> list[str]:
     if citation_key:
         citation = event.get(citation_key)
         if isinstance(citation, dict):
-            evidence_ids = [str(value) for value in citation.get("evidence_ids") or [] if value]
-            if evidence_ids:
-                return evidence_ids
-    return [str(value) for value in event.get("evidence_ids") or [] if value]
+            return citation
+    return None
 
 
 def _event_side(event: dict[str, Any], value: str, conflict_type: str) -> dict[str, Any]:
-    return {
+    citation = _field_citation(event, conflict_type)
+    evidence_ids = [str(value) for value in citation.get("evidence_ids") or [] if value] if citation else []
+    side = {
         "value": value,
         "event_id": event["event_id"],
-        "evidence_ids": _field_evidence_ids(event, conflict_type),
+        "evidence_ids": evidence_ids or [str(value) for value in event.get("evidence_ids") or [] if value],
     }
+    if isinstance(citation, dict) and citation.get("citation_origin") in {"explicit", "fallback"}:
+        side["citation_origin"] = citation["citation_origin"]
+    return side
 
 
 def _add_conflict(

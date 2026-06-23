@@ -28,7 +28,19 @@
         "unit": "vehicles"
       },
       "match": "Brief note: Delta convoy checked in at 14:00 at Harbor Gate with 3 vehicles",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "14:00",
+        "match": "Brief note: Delta convoy checked in at 14:00 at Harbor Gate with 3 vehicles"
+      },
+      "location_citation": {
+        "value": "Harbor Gate",
+        "match": "Brief note: Delta convoy checked in at 14:00 at Harbor Gate with 3 vehicles"
+      },
+      "quantity_citation": {
+        "value": "3 vehicles",
+        "match": "Brief note: Delta convoy checked in at 14:00 at Harbor Gate with 3 vehicles"
+      }
     },
     {
       "event_key": "Delta-convoy-check-in",
@@ -44,7 +56,19 @@
         "unit": "vehicles"
       },
       "match": "Report check: Delta checkpoint remained listed as 14:00 in the duty roster",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "14:00",
+        "match": "Report check: Delta checkpoint remained listed as 14:00 in the duty roster"
+      },
+      "location_citation": {
+        "value": "Harbor Gate",
+        "match": "Report check: Delta checkpoint remained listed as 14:00 in the duty roster"
+      },
+      "quantity_citation": {
+        "value": "3 vehicles",
+        "match": "Report check: Delta checkpoint remained listed as 14:00 in the duty roster"
+      }
     },
     {
       "event_key": "Delta-convoy-check-in",
@@ -60,7 +84,19 @@
         "unit": "vehicles"
       },
       "match": "Board text: Delta check-in 14:00, Harbor Gate, 3 vehicles.",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "14:00",
+        "match": "Board text: Delta check-in 14:00, Harbor Gate, 3 vehicles."
+      },
+      "location_citation": {
+        "value": "Harbor Gate",
+        "match": "Board text: Delta check-in 14:00, Harbor Gate, 3 vehicles."
+      },
+      "quantity_citation": {
+        "value": "3 vehicles",
+        "match": "Board text: Delta check-in 14:00, Harbor Gate, 3 vehicles."
+      }
     },
     {
       "event_key": "Delta-convoy-check-in",
@@ -76,7 +112,19 @@
         "unit": "vehicles"
       },
       "match": "Radio transcript: Delta check-in was actually 16:30 at Harbor Gate with 3 vehicles.",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "16:30",
+        "match": "Radio transcript: Delta check-in was actually 16:30 at Harbor Gate with 3 vehicles."
+      },
+      "location_citation": {
+        "value": "Harbor Gate",
+        "match": "Radio transcript: Delta check-in was actually 16:30 at Harbor Gate with 3 vehicles."
+      },
+      "quantity_citation": {
+        "value": "3 vehicles",
+        "match": "Radio transcript: Delta check-in was actually 16:30 at Harbor Gate with 3 vehicles."
+      }
     },
     {
       "event_key": "Delta-convoy-check-in",
@@ -92,7 +140,19 @@
         "unit": "vehicles"
       },
       "match": "Video audio: Delta convoy check-in time is 16:30 at Harbor Gate.",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "16:30",
+        "match": "Video audio: Delta convoy check-in time is 16:30 at Harbor Gate."
+      },
+      "location_citation": {
+        "value": "Harbor Gate",
+        "match": "Video audio: Delta convoy check-in time is 16:30 at Harbor Gate."
+      },
+      "quantity_citation": {
+        "value": "3 vehicles",
+        "match": "Video audio: Delta convoy check-in time is 16:30 at Harbor Gate."
+      }
     },
     {
       "event_key": "Delta-convoy-check-in",
@@ -108,7 +168,19 @@
         "unit": "vehicles"
       },
       "match": "Video slate shows Delta check-in 16:30.",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "16:30",
+        "match": "Video slate shows Delta check-in 16:30."
+      },
+      "location_citation": {
+        "value": "Harbor Gate",
+        "match": "Video slate shows Delta check-in 16:30."
+      },
+      "quantity_citation": {
+        "value": "3 vehicles",
+        "match": "Video slate shows Delta check-in 16:30."
+      }
     }
   ]
 }

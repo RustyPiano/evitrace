@@ -34,7 +34,19 @@
         "unit": "vehicles"
       },
       "match": "Brief note: Foxtrot patrol counted 3 utility vehicles at Training Yard at 11:20",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "11:20",
+        "match": "Brief note: Foxtrot patrol counted 3 utility vehicles at Training Yard at 11:20"
+      },
+      "location_citation": {
+        "value": "Training Yard",
+        "match": "Brief note: Foxtrot patrol counted 3 utility vehicles at Training Yard at 11:20"
+      },
+      "quantity_citation": {
+        "value": "3 vehicles",
+        "match": "Brief note: Foxtrot patrol counted 3 utility vehicles at Training Yard at 11:20"
+      }
     },
     {
       "event_key": "Foxtrot-patrol-vehicle-count",
@@ -50,7 +62,19 @@
         "unit": "vehicles"
       },
       "match": "Report check: The maintenance summary also records three vehicles for Foxtrot patrol",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "11:20",
+        "match": "Report check: The maintenance summary also records three vehicles for Foxtrot patrol"
+      },
+      "location_citation": {
+        "value": "Training Yard",
+        "match": "Report check: The maintenance summary also records three vehicles for Foxtrot patrol"
+      },
+      "quantity_citation": {
+        "value": "3 vehicles",
+        "match": "Report check: The maintenance summary also records three vehicles for Foxtrot patrol"
+      }
     },
     {
       "event_key": "Foxtrot-patrol-vehicle-count",
@@ -66,7 +90,19 @@
         "unit": "vehicles"
       },
       "match": "Whiteboard: Foxtrot patrol count 3 vehicles at Training Yard.",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "11:20",
+        "match": "Whiteboard: Foxtrot patrol count 3 vehicles at Training Yard."
+      },
+      "location_citation": {
+        "value": "Training Yard",
+        "match": "Whiteboard: Foxtrot patrol count 3 vehicles at Training Yard."
+      },
+      "quantity_citation": {
+        "value": "3 vehicles",
+        "match": "Whiteboard: Foxtrot patrol count 3 vehicles at Training Yard."
+      }
     },
     {
       "event_key": "Foxtrot-patrol-vehicle-count",
@@ -82,7 +118,19 @@
         "unit": "vehicles"
       },
       "match": "Radio transcript: Foxtrot patrol counted 5 vehicles at Training Yard.",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "11:20",
+        "match": "Radio transcript: Foxtrot patrol counted 5 vehicles at Training Yard."
+      },
+      "location_citation": {
+        "value": "Training Yard",
+        "match": "Radio transcript: Foxtrot patrol counted 5 vehicles at Training Yard."
+      },
+      "quantity_citation": {
+        "value": "5 vehicles",
+        "match": "Radio transcript: Foxtrot patrol counted 5 vehicles at Training Yard."
+      }
     },
     {
       "event_key": "Foxtrot-patrol-vehicle-count",
@@ -98,7 +146,19 @@
         "unit": "vehicles"
       },
       "match": "Video audio: Foxtrot patrol count is 5 vehicles.",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "11:20",
+        "match": "Video audio: Foxtrot patrol count is 5 vehicles."
+      },
+      "location_citation": {
+        "value": "Training Yard",
+        "match": "Video audio: Foxtrot patrol count is 5 vehicles."
+      },
+      "quantity_citation": {
+        "value": "5 vehicles",
+        "match": "Video audio: Foxtrot patrol count is 5 vehicles."
+      }
     },
     {
       "event_key": "Foxtrot-patrol-vehicle-count",
@@ -114,7 +174,19 @@
         "unit": "vehicles"
       },
       "match": "Video slate shows Foxtrot count 5 vehicles.",
-      "confidence": 0.88
+      "confidence": 0.88,
+      "time_citation": {
+        "value": "11:20",
+        "match": "Video slate shows Foxtrot count 5 vehicles."
+      },
+      "location_citation": {
+        "value": "Training Yard",
+        "match": "Video slate shows Foxtrot count 5 vehicles."
+      },
+      "quantity_citation": {
+        "value": "5 vehicles",
+        "match": "Video slate shows Foxtrot count 5 vehicles."
+      }
     }
   ]
 }

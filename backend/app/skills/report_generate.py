@@ -10,6 +10,7 @@ from app.utils.citations import (
     CONFLICT_HEADING_RE,
     SECTION_RE,
     TIMELINE_HEADING_RE,
+    field_citation_stats,
     ordered_unique,
     validate_report_citations,
 )
@@ -286,6 +287,9 @@ class ReportGenerateSkill:
         markdown = _with_run_metadata(markdown)
         markdown = _with_structured_fact_sections(markdown, payload)
         citation_check = validate_report_citations(markdown, _valid_ids(list(payload.get("evidence") or [])))
+        citation_check = citation_check.model_copy(
+            update=field_citation_stats(list(payload.get("events") or []))
+        )
         if citation_check.invalid_citations:
             warnings.append("报告存在无效证据引用")
         if citation_check.uncited_fact_count:

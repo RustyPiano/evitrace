@@ -11,6 +11,9 @@
         <el-tag :type="coverage < 0.9 ? 'warning' : 'success'" effect="plain">
           引用覆盖 {{ formatPercent(coverage) }}
         </el-tag>
+        <el-tag v-if="fieldExplicitRatio !== null" type="info" effect="plain">
+          字段显式引用 {{ formatPercent(fieldExplicitRatio) }}
+        </el-tag>
       </div>
       <div class="report-actions">
         <el-button
@@ -81,6 +84,7 @@ const hasCitationCheck = computed(() => props.analysisComplete && props.citation
 const invalidCitations = computed(() => props.citationCheck?.invalid_citations ?? []);
 const invalidCitationSet = computed(() => new Set(invalidCitations.value));
 const coverage = computed(() => props.citationCheck?.citation_coverage ?? 0);
+const fieldExplicitRatio = computed(() => props.citationCheck?.field_explicit_ratio ?? null);
 const renderedReport = computed(() => renderMarkdown(props.reportMarkdown ?? "", invalidCitationSet.value));
 const emptyReason = computed(() => {
   if (props.running) {

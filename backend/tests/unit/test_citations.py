@@ -1,4 +1,4 @@
-from app.utils.citations import validate_report_citations
+from app.utils.citations import field_citation_stats, validate_report_citations
 
 
 def test_validate_report_citations_finds_invalid_references():
@@ -88,3 +88,60 @@ def test_validate_report_citations_accepts_spaced_conclusion_heading():
 
     assert check.conclusion_paragraph_count == 1
     assert check.citation_coverage == 1.0
+
+
+def test_field_citation_stats_counts_all_explicit_fields():
+    stats = field_citation_stats(
+        [
+            {
+                "time_citation": {"value": "14:00", "evidence_ids": ["E-0001"], "citation_origin": "explicit"},
+                "location_citation": {"value": "地点A", "evidence_ids": ["E-0001"], "citation_origin": "explicit"},
+                "quantity_citation": {"value": "3 辆", "evidence_ids": ["E-0001"], "citation_origin": "explicit"},
+            }
+        ]
+    )
+
+    assert stats == {
+        "field_citation_total": 3,
+        "field_citation_explicit": 3,
+        "field_explicit_ratio": 1.0,
+    }
+
+
+def test_field_citation_stats_counts_all_fallback_fields():
+    stats = field_citation_stats(
+        [
+            {
+                "time_citation": {"value": "14:00", "evidence_ids": ["E-0001"], "citation_origin": "fallback"},
+                "location_citation": {"value": "地点A", "evidence_ids": ["E-0001"], "citation_origin": "fallback"},
+                "quantity_citation": {"value": "3 辆", "evidence_ids": ["E-0001"], "citation_origin": "fallback"},
+            }
+        ]
+    )
+
+    assert stats == {
+        "field_citation_total": 3,
+        "field_citation_explicit": 0,
+        "field_explicit_ratio": 0.0,
+    }
+
+
+def test_field_citation_stats_counts_mixed_fields():
+    stats = field_citation_stats(
+        [
+            {
+                "time_citation": {"value": "14:00", "evidence_ids": ["E-0001"], "citation_origin": "explicit"},
+                "location_citation": {"value": "地点A", "evidence_ids": ["E-0001"], "citation_origin": "fallback"},
+                "quantity_citation": None,
+            },
+            {
+                "time_citation": {"value": "16:30", "evidence_ids": ["E-0002"], "citation_origin": "explicit"},
+            },
+        ]
+    )
+
+    assert stats == {
+        "field_citation_total": 3,
+        "field_citation_explicit": 2,
+        "field_explicit_ratio": 2 / 3,
+    }
