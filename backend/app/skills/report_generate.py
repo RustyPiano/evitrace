@@ -138,24 +138,30 @@ def _component_versions(metadata: dict[str, Any]) -> str:
     return ", ".join(f"{skill_id}@{versions[skill_id]}" for skill_id in required_ids)
 
 
-def _source_label(source: str) -> str:
-    return {"http": "http", "lib": "本地库", "fixture": "演示"}[source]
+def _deployment_label(deployment: str | None) -> str:
+    if deployment is None:
+        return "演示"
+    return {"local": "本地", "remote": "远程"}[deployment]
+
+
+def _component_runtime_label(component: dict[str, Any]) -> str:
+    if not component["real"]:
+        return "演示"
+    deployment = _deployment_label(component.get("deployment"))
+    model = component.get("model")
+    return f"{deployment}·{model}" if model else deployment
 
 
 def _with_run_metadata(markdown: str) -> str:
     markdown = _with_report_notice(markdown)
     metadata = run_mode_metadata()
-    llm = metadata["llm"]["model"] if metadata["llm"]["real"] else "演示"
-    if metadata["vision"]["real"]:
-        vision = metadata["vision"]["model"] or "未启用"
-    else:
-        vision = "演示"
+    llm = _component_runtime_label(metadata["llm"])
+    vision = _component_runtime_label(metadata["vision"])
+    ocr = _component_runtime_label(metadata["ocr"])
+    asr = _component_runtime_label(metadata["asr"])
     line = (
-        f"> 运行模式：{metadata['mode_label']}"
-        f"｜LLM：{llm}"
-        f"｜视觉：{vision}"
-        f"｜OCR：{_source_label(metadata['ocr']['source'])}"
-        f"｜ASR：{_source_label(metadata['asr']['source'])}"
+        f"> 运行模式：{metadata['mode_label']}（"
+        f"LLM：{llm}｜视觉：{vision}｜OCR：{ocr}｜ASR：{asr}）"
         f"｜分析组件：{_component_versions(metadata)}"
     )
     body = markdown[len(REPORT_NOTICE) :].lstrip()

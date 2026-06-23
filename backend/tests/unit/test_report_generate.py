@@ -1,3 +1,5 @@
+import re
+
 from app.skills.base import SkillContext
 from app.skills.report_generate import REPORT_NOTICE, ReportGenerateSkill, _timeline_lines
 
@@ -112,7 +114,8 @@ def test_report_metadata_is_inserted_after_notice_and_before_body(monkeypatch, t
     monkeypatch.setattr("app.skills.report_generate.settings.mock_media", False)
     monkeypatch.setattr("app.skills.report_generate.settings.mock_vision", True)
     monkeypatch.setattr("app.skills.report_generate.settings.local_llm_model", "deepseek-v4-flash")
-    monkeypatch.setattr("app.skills.report_generate.settings.ocr_base_url", "http://ocr.local")
+    monkeypatch.setattr("app.skills.report_generate.settings.local_llm_base_url", "https://api.deepseek.com/v1")
+    monkeypatch.setattr("app.skills.report_generate.settings.ocr_base_url", "http://127.0.0.1:8000")
     monkeypatch.setattr("app.skills.report_generate.settings.asr_base_url", None)
 
     result = ReportGenerateSkill().run(_context(tmp_path), _payload())
@@ -121,16 +124,19 @@ def test_report_metadata_is_inserted_after_notice_and_before_body(monkeypatch, t
     metadata_line = lines[2]
     assert lines[0] == REPORT_NOTICE
     assert metadata_line.startswith("> 运行模式：混合模式")
-    assert "LLM：deepseek-v4-flash" in metadata_line
+    assert "LLM：远程·deepseek-v4-flash" in metadata_line
     assert "视觉：演示" in metadata_line
-    assert "OCR：http" in metadata_line
-    assert "ASR：本地库" in metadata_line
+    assert "OCR：本地" in metadata_line
+    assert "ASR：本地" in metadata_line
     assert "intelligence_extract@" in metadata_line
     assert "conflict_detect@" in metadata_line
     assert "report_generate@" in metadata_line
     assert "base_url" not in metadata_line
     assert "api_key" not in metadata_line
-    assert "http://ocr.local" not in metadata_line
+    assert "http://" not in metadata_line
+    assert "https://" not in metadata_line
+    assert "sk-" not in metadata_line
+    assert re.search(r"E-\d{4,}", metadata_line) is None
     assert result.data["citation_check"]["invalid_citations"] == []
     assert result.data["citation_check"]["citation_coverage"] == 1.0
 

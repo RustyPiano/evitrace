@@ -46,7 +46,7 @@ import { useRoute, useRouter } from "vue-router";
 
 import { getSystemMode } from "@/api/system";
 import { useAuthStore } from "@/stores/auth";
-import type { RunModeMetadata } from "@/types/system";
+import type { ComponentDeployment, RunModeMetadata } from "@/types/system";
 
 const route = useRoute();
 const router = useRouter();
@@ -69,10 +69,10 @@ const runModeTitle = computed(() => {
   }
   const metadata = runMode.value;
   return [
-    `LLM：${metadata.llm.real ? metadata.llm.model : "演示"}`,
-    `视觉：${metadata.vision.real ? metadata.vision.model || "未启用" : "演示"}`,
-    `OCR：${sourceLabel(metadata.ocr.source)}`,
-    `ASR：${sourceLabel(metadata.asr.source)}`
+    `LLM：${componentTitle(metadata.llm, "未配置")}`,
+    `视觉：${componentTitle(metadata.vision, "未启用")}`,
+    `OCR：${componentTitle(metadata.ocr)}`,
+    `ASR：${componentTitle(metadata.asr)}`
   ].join("｜");
 });
 
@@ -85,7 +85,25 @@ function logout() {
   router.push("/login");
 }
 
-function sourceLabel(source: "http" | "lib" | "fixture") {
-  return { http: "http", lib: "本地库", fixture: "演示" }[source];
+function componentTitle(
+  component: { real: boolean; model?: string | null; deployment?: ComponentDeployment | null },
+  missingModelLabel?: string
+) {
+  if (!component.real) {
+    return "演示";
+  }
+  const model = component.model || missingModelLabel;
+  const deployment = deploymentLabel(component.deployment);
+  return model ? `${model} · ${deployment}` : deployment;
+}
+
+function deploymentLabel(deployment?: ComponentDeployment | null) {
+  if (deployment === "local") {
+    return "本地";
+  }
+  if (deployment === "remote") {
+    return "远程";
+  }
+  return "未知";
 }
 </script>

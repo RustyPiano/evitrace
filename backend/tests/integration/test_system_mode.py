@@ -21,7 +21,9 @@ def test_system_mode_returns_run_mode_for_logged_in_user(client, create_user):
     assert body["message"] == "ok"
     data = body["data"]
     assert data["mode"] in {"real", "mock", "hybrid"}
-    assert data["mode_label"] in {"本地真实", "演示Fixture", "混合模式"}
+    assert data["mode_label"] in {"全真实链路", "演示Fixture", "混合模式"}
+    assert data["execution_mode"] == data["mode"]
+    assert data["deployment_mode"] in {"local", "remote", "mixed", None}
     assert {"mock_llm", "mock_media", "mock_vision", "llm", "vision", "ocr", "asr", "skills"} <= set(data)
     assert isinstance(data["skills"], list)
     serialized = json.dumps(data, ensure_ascii=False)
