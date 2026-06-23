@@ -461,6 +461,24 @@ textarea {
   line-height: 1.5;
 }
 
+.run-selector {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: min(100%, 480px);
+  margin-top: 12px;
+}
+
+.run-selector span {
+  flex: 0 0 auto;
+  color: #374151;
+  font-size: 14px;
+}
+
+.run-selector .el-select {
+  min-width: 320px;
+}
+
 .workbench-actions {
   display: flex;
   flex-wrap: wrap;
@@ -890,10 +908,15 @@ textarea {
 
   .workbench-topbar,
   .workbench-actions,
+  .run-selector,
   .panel-toolbar,
   .report-toolbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .run-selector .el-select {
+    min-width: 0;
   }
 
   .workbench-grid,

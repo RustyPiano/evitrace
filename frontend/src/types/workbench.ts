@@ -48,6 +48,15 @@ export interface RunStatus {
   error_message: string | null;
 }
 
+export interface TaskRunSummary {
+  run_id: string;
+  status: string;
+  progress: number;
+  started_at: string | null;
+  finished_at: string | null;
+  has_result: boolean;
+}
+
 export interface AnalysisEntity {
   type: string;
   name: string;

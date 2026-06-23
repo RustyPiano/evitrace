@@ -103,6 +103,7 @@ const props = defineProps<{
   taskId: string;
   conflicts: AnalysisConflict[];
   running: boolean;
+  runId: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -129,7 +130,9 @@ const filteredConflicts = computed(() => {
 async function updateStatus(conflictId: string, status: string) {
   updatingId.value = conflictId;
   try {
-    await apiClient.patch(`/tasks/${props.taskId}/conflicts/${conflictId}`, { status });
+    await apiClient.patch(`/tasks/${props.taskId}/conflicts/${conflictId}`, { status }, {
+      params: currentRunParams()
+    });
     ElMessage.success("冲突状态已更新");
     emit("updated");
   } catch (error) {
@@ -137,5 +140,9 @@ async function updateStatus(conflictId: string, status: string) {
   } finally {
     updatingId.value = "";
   }
+}
+
+function currentRunParams(): { run_id: string } | undefined {
+  return props.runId ? { run_id: props.runId } : undefined;
 }
 </script>

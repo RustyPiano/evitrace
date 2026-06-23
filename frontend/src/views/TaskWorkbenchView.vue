@@ -11,9 +11,25 @@
           </el-tag>
         </div>
         <p>{{ task?.objective ?? "加载任务中" }}</p>
+        <div class="run-selector">
+          <span>分析版本</span>
+          <el-select
+            v-model="selectedRunId"
+            placeholder="暂无运行"
+            :disabled="!runs.length"
+            @change="changeSelectedRun"
+          >
+            <el-option
+              v-for="run in runs"
+              :key="run.run_id"
+              :label="runOptionLabel(run)"
+              :value="run.run_id"
+            />
+          </el-select>
+        </div>
       </div>
       <div class="workbench-actions">
-        <el-progress class="top-progress" :percentage="latestRun?.progress ?? 0" />
+        <el-progress v-if="isSelectedLatestRun" class="top-progress" :percentage="latestRun?.progress ?? 0" />
         <el-button
           type="primary"
           :loading="analysisStarting"
@@ -72,7 +88,7 @@
       <div class="workbench-grid">
         <aside class="workbench-left">
           <FileList :files="task.files" :running="isRunning" @deleted="refreshAll" />
-          <RunProgress :run="latestRun" />
+          <RunProgress :run="selectedRunProgress" />
         </aside>
 
         <main class="workbench-center">
@@ -96,7 +112,8 @@
               <ConflictPanel
                 :task-id="task.id"
                 :conflicts="analysisResult?.conflicts ?? []"
-                :running="isRunning"
+                :running="isSelectedRunRunning"
+                :run-id="selectedRunId"
                 @select-evidence="selectEvidenceByDisplayId"
                 @updated="refreshResults"
               />
@@ -106,8 +123,9 @@
                 :task-id="task.id"
                 :report-markdown="analysisResult?.report_markdown ?? null"
                 :citation-check="analysisResult?.citation_check ?? null"
-                :running="isRunning"
+                :running="isSelectedRunRunning"
                 :analysis-complete="Boolean(analysisResult)"
+                :run-id="selectedRunId"
                 @select-evidence="selectEvidenceByDisplayId"
                 @regenerated="refreshResults"
               />
@@ -115,7 +133,7 @@
           </el-tabs>
         </main>
 
-        <EvidencePanel class="workbench-right" :evidence-id="selectedEvidenceId" />
+        <EvidencePanel class="workbench-right" :evidence-id="selectedEvidenceId" :run-id="selectedRunId" />
       </div>
     </template>
   </section>
@@ -134,11 +152,12 @@ import ReportPanel from "@/components/ReportPanel.vue";
 import RunProgress from "@/components/RunProgress.vue";
 import TimelinePanel from "@/components/TimelinePanel.vue";
 import { useAuthStore } from "@/stores/auth";
-import type { AnalysisResult, RunStatus, TaskDetail, TimelineItem } from "@/types/workbench";
+import type { AnalysisResult, RunStatus, TaskDetail, TaskRunSummary, TimelineItem } from "@/types/workbench";
 import { extractErrorMessage } from "@/utils/errors";
 import {
   formatPercent,
   isRunningStatus,
+  runStatusLabel,
   taskStatusLabel,
   taskStatusTag
 } from "@/utils/status";
@@ -158,6 +177,8 @@ const loading = ref(false);
 const errorMessage = ref("");
 const activeTab = ref("overview");
 const latestRun = ref<RunStatus | null>(null);
+const runs = ref<TaskRunSummary[]>([]);
+const selectedRunId = ref<string | null>(null);
 const analysisResult = ref<AnalysisResult | null>(null);
 const evidenceItems = ref<EvidenceIndexItem[]>([]);
 const evidenceTotal = ref(0);
@@ -170,6 +191,29 @@ let pollTimer: number | null = null;
 let polling = false;
 
 const isRunning = computed(() => Boolean(task.value && isRunningStatus(task.value.status)));
+const isLatestRunRunning = computed(() => Boolean(latestRun.value && isRunRunning(latestRun.value.status)));
+const isSelectedLatestRun = computed(
+  () => Boolean(latestRun.value && selectedRunId.value === latestRun.value.run_id)
+);
+const isSelectedRunRunning = computed(() => isSelectedLatestRun.value && isLatestRunRunning.value);
+const selectedRunProgress = computed<RunStatus | null>(() => {
+  if (isSelectedLatestRun.value) {
+    return latestRun.value;
+  }
+  const run = runs.value.find((item) => item.run_id === selectedRunId.value);
+  if (!run) {
+    return null;
+  }
+  return {
+    run_id: run.run_id,
+    status: run.status,
+    plan_json: null,
+    progress: run.progress,
+    current_step: null,
+    warnings: [],
+    error_message: null
+  };
+});
 const citationCoverage = computed(() => analysisResult.value?.citation_check?.citation_coverage ?? 0);
 const invalidCitationCount = computed(() => analysisResult.value?.citation_check?.invalid_citations?.length ?? 0);
 const activeConflictCount = computed(
@@ -213,7 +257,7 @@ const completionHint = computed(() => {
 });
 const overviewStats = computed(() => [
   { label: "文件数", value: String(task.value?.file_count ?? 0) },
-  { label: "证据数", value: String(task.value?.evidence_count ?? evidenceTotal.value) },
+  { label: "证据数", value: String(evidenceTotal.value) },
   { label: "实体数", value: String(analysisResult.value?.entities.length ?? 0) },
   { label: "事件数", value: String(analysisResult.value?.events.length ?? 0) },
   { label: "冲突数", value: String(activeConflictCount.value) },
@@ -261,7 +305,8 @@ async function refreshAll(showLoading = false, rethrow = false) {
   }
   errorMessage.value = "";
   try {
-    await Promise.all([loadTask(), loadLatestRun(), loadEvidence(), loadResults()]);
+    await Promise.all([loadTask(), loadLatestRun(), loadRuns()]);
+    await Promise.all([loadEvidence(), loadResults()]);
   } catch (error) {
     errorMessage.value = extractErrorMessage(error, "加载任务工作台失败");
     if (rethrow) {
@@ -277,8 +322,16 @@ async function loadTask() {
   task.value = response.data.data;
 }
 
+async function loadRuns(preferredRunId?: string) {
+  const response = await apiClient.get<{ data: TaskRunSummary[] }>(`/tasks/${taskId}/runs`);
+  runs.value = response.data.data;
+  syncSelectedRun(preferredRunId);
+}
+
 async function loadEvidence() {
-  const response = await apiClient.get<{ data: EvidenceIndexItem[] }>(`/tasks/${taskId}/evidence/index`);
+  const response = await apiClient.get<{ data: EvidenceIndexItem[] }>(`/tasks/${taskId}/evidence/index`, {
+    params: currentRunParams()
+  });
   evidenceItems.value = response.data.data;
   evidenceTotal.value = response.data.data.length;
 }
@@ -298,7 +351,9 @@ async function loadLatestRun() {
 
 async function loadResults() {
   try {
-    const response = await apiClient.get<{ data: AnalysisResult }>(`/tasks/${taskId}/results`);
+    const response = await apiClient.get<{ data: AnalysisResult }>(`/tasks/${taskId}/results`, {
+      params: currentRunParams()
+    });
     analysisResult.value = response.data.data;
   } catch (error: unknown) {
     if (isNotFound(error)) {
@@ -310,7 +365,7 @@ async function loadResults() {
 }
 
 async function refreshResults() {
-  await loadResults();
+  await Promise.all([loadEvidence(), loadResults()]);
 }
 
 async function startAnalysis() {
@@ -321,8 +376,10 @@ async function startAnalysis() {
   errorMessage.value = "";
   try {
     const response = await apiClient.post<{ data: { run_id: string; status: string } }>(`/tasks/${task.value.id}/runs`);
+    const newRunId = response.data.data.run_id;
+    selectedRunId.value = newRunId;
     latestRun.value = {
-      run_id: response.data.data.run_id,
+      run_id: newRunId,
       status: response.data.data.status,
       plan_json: null,
       progress: 0,
@@ -332,6 +389,8 @@ async function startAnalysis() {
     };
     task.value.status = "queued";
     analysisResult.value = null;
+    selectedEvidenceId.value = null;
+    await loadRuns(newRunId);
     startPolling();
   } catch (error) {
     ElMessage.error(extractErrorMessage(error, "启动分析失败"));
@@ -366,6 +425,7 @@ async function downloadReport() {
   downloading.value = true;
   try {
     const response = await apiClient.get(`/tasks/${task.value.id}/report/download`, {
+      params: currentRunParams(),
       responseType: "blob"
     });
     const filename = filenameFromDisposition(response.headers["content-disposition"]) ?? "分析报告.md";
@@ -431,6 +491,49 @@ function selectEvidenceByDisplayId(displayId: string) {
     return;
   }
   selectedEvidenceId.value = id;
+}
+
+async function changeSelectedRun() {
+  selectedEvidenceId.value = null;
+  try {
+    await Promise.all([loadEvidence(), loadResults()]);
+  } catch (error) {
+    ElMessage.error(extractErrorMessage(error, "切换分析版本失败"));
+  }
+}
+
+function syncSelectedRun(preferredRunId?: string) {
+  if (!runs.value.length) {
+    selectedRunId.value = null;
+    return;
+  }
+  const candidate = preferredRunId ?? selectedRunId.value;
+  if (candidate && runs.value.some((run) => run.run_id === candidate)) {
+    selectedRunId.value = candidate;
+    return;
+  }
+  selectedRunId.value = runs.value.find((run) => run.has_result)?.run_id ?? runs.value[0].run_id;
+}
+
+function currentRunParams(): { run_id: string } | undefined {
+  return selectedRunId.value ? { run_id: selectedRunId.value } : undefined;
+}
+
+function runOptionLabel(run: TaskRunSummary): string {
+  const resultSuffix = run.has_result ? "" : "（无结果）";
+  return `${formatRunTime(run.started_at)} ${runStatusLabel(run.status)}${resultSuffix} ${shortRunId(run.run_id)}`;
+}
+
+function formatRunTime(value: string | null): string {
+  return value ? new Date(value).toLocaleString() : "未知时间";
+}
+
+function shortRunId(runId: string): string {
+  return runId.slice(0, 8);
+}
+
+function isRunRunning(status: string): boolean {
+  return status === "running" || isRunningStatus(status);
 }
 
 function isNotFound(error: unknown): boolean {

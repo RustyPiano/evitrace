@@ -68,6 +68,7 @@ import { apiClient } from "@/api/client";
 
 const props = defineProps<{
   evidenceId: string | null;
+  runId: string | null;
 }>();
 
 interface TaskFile {
@@ -160,8 +161,8 @@ const locatorItems = computed(() => {
 });
 
 watch(
-  () => props.evidenceId,
-  async (id) => {
+  () => [props.evidenceId, props.runId] as const,
+  async ([id]) => {
     releaseObjectUrls();
     evidence.value = null;
     source.value = null;
@@ -172,8 +173,12 @@ watch(
     loading.value = true;
     try {
       const [detailResponse, sourceResponse] = await Promise.all([
-        apiClient.get<{ data: EvidenceDetail }>(`/evidence/${id}`),
-        apiClient.get<{ data: EvidenceSource }>(`/evidence/${id}/source`)
+        apiClient.get<{ data: EvidenceDetail }>(`/evidence/${id}`, {
+          params: currentRunParams()
+        }),
+        apiClient.get<{ data: EvidenceSource }>(`/evidence/${id}/source`, {
+          params: currentRunParams()
+        })
       ]);
       evidence.value = detailResponse.data.data;
       source.value = sourceResponse.data.data;
@@ -208,8 +213,15 @@ async function loadPreviewAssets() {
 
 async function fetchProtectedBlob(url: string): Promise<string> {
   const apiPath = url.startsWith("/api/v1") ? url.slice("/api/v1".length) : url;
-  const response = await apiClient.get(apiPath, { responseType: "blob" });
+  const response = await apiClient.get(apiPath, {
+    params: currentRunParams(),
+    responseType: "blob"
+  });
   return URL.createObjectURL(response.data as Blob);
+}
+
+function currentRunParams(): { run_id: string } | undefined {
+  return props.runId ? { run_id: props.runId } : undefined;
 }
 
 function seekToLocator() {

@@ -70,6 +70,7 @@ const props = defineProps<{
   citationCheck: CitationCheck | null;
   running: boolean;
   analysisComplete: boolean;
+  runId: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -99,7 +100,9 @@ const emptyReason = computed(() => {
 async function regenerateReport() {
   regenerating.value = true;
   try {
-    await apiClient.post(`/tasks/${props.taskId}/report/regenerate`);
+    await apiClient.post(`/tasks/${props.taskId}/report/regenerate`, undefined, {
+      params: currentRunParams()
+    });
     ElMessage.success("报告已重新生成");
     emit("regenerated");
   } catch (error) {
@@ -113,6 +116,7 @@ async function downloadReport() {
   downloading.value = true;
   try {
     const response = await apiClient.get(`/tasks/${props.taskId}/report/download`, {
+      params: currentRunParams(),
       responseType: "blob"
     });
     const filename = filenameFromDisposition(response.headers["content-disposition"]) ?? "分析报告.md";
@@ -127,6 +131,10 @@ async function downloadReport() {
   } finally {
     downloading.value = false;
   }
+}
+
+function currentRunParams(): { run_id: string } | undefined {
+  return props.runId ? { run_id: props.runId } : undefined;
 }
 
 function handleCitationClick(event: MouseEvent) {
