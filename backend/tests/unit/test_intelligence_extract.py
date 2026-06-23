@@ -469,6 +469,188 @@ def test_real_extraction_prefilters_before_batching_and_discloses_savings(monkey
     ]
 
 
+def test_real_extraction_relevance_prefilter_sends_only_selected_evidence_and_warns(monkeypatch, tmp_path):
+    calls: list[str] = []
+
+    class FakeClient:
+        def generate_json(self, _system, user, schema):
+            calls.append(user)
+            display_ids = re.findall(r"\[(E-\d{4})\]", user)
+            return schema.model_validate(
+                {
+                    "events": [
+                        {
+                            "event_key": f"分队-发现-{display_id}",
+                            "title": "发现车辆",
+                            "evidence_ids": [display_id],
+                        }
+                        for display_id in display_ids
+                    ]
+                }
+            )
+
+    evidence = [
+        {
+            "display_id": "E-0001",
+            "content": "目标车队在A镇发现3辆车。",
+            "content_summary": "目标车队在A镇发现3辆车。",
+            "file": {"id": "doc-a", "original_name": "a.txt"},
+            "locator": {"kind": "text"},
+        },
+        {
+            "display_id": "E-0002",
+            "content": "普通巡逻完成。",
+            "content_summary": "普通巡逻完成。",
+            "file": {"id": "doc-a", "original_name": "a.txt"},
+            "locator": {"kind": "text"},
+        },
+        {
+            "display_id": "E-0003",
+            "content": "目标车队在B镇发现5辆车。",
+            "content_summary": "目标车队在B镇发现5辆车。",
+            "file": {"id": "doc-b", "original_name": "b.txt"},
+            "locator": {"kind": "text"},
+        },
+        {
+            "display_id": "E-0004",
+            "content": "天气晴朗，道路通畅。",
+            "content_summary": "天气晴朗，道路通畅。",
+            "file": {"id": "doc-b", "original_name": "b.txt"},
+            "locator": {"kind": "text"},
+        },
+    ]
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_relevance_top_k", 2, raising=False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_relevance_per_doc_min", 1, raising=False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_batch_max_items", 30, raising=False)
+
+    result = IntelligenceExtractSkill(llm_client=FakeClient()).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "目标车队 A镇 B镇"}, "evidence": evidence},
+    )
+
+    sent = "\n".join(calls)
+    assert result.success is True
+    assert len(calls) == 1
+    assert "[E-0001]" in sent
+    assert "[E-0002]" not in sent
+    assert "[E-0003]" in sent
+    assert "[E-0004]" not in sent
+    assert [event["evidence_ids"][0] for event in result.data["events"]] == ["E-0001", "E-0003"]
+    assert result.warnings == [
+        "已按相关性预筛：从 4 条相关排序保留 2 条（每文档≥1，top_k=2），"
+        "其余 2 条未进入本次分析；如需全量请调大或关闭 EXTRACT_RELEVANCE_TOP_K"
+    ]
+
+
+def test_real_extraction_relevance_prefilter_noops_when_disabled_or_not_smaller(monkeypatch, tmp_path):
+    calls: list[str] = []
+
+    class FakeClient:
+        def generate_json(self, _system, user, schema):
+            calls.append(user)
+            display_ids = re.findall(r"\[(E-\d{4})\]", user)
+            return schema.model_validate(
+                {
+                    "events": [
+                        {
+                            "event_key": f"分队-发现-{display_id}",
+                            "title": "发现车辆",
+                            "evidence_ids": [display_id],
+                        }
+                        for display_id in display_ids
+                    ]
+                }
+            )
+
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_batch_max_items", 30, raising=False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_relevance_per_doc_min", 0, raising=False)
+
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_relevance_top_k", 0, raising=False)
+    disabled = IntelligenceExtractSkill(llm_client=FakeClient()).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "地点1"}, "evidence": _many_evidence(3)},
+    )
+
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_relevance_top_k", 3, raising=False)
+    not_smaller = IntelligenceExtractSkill(llm_client=FakeClient()).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "地点1"}, "evidence": _many_evidence(3)},
+    )
+
+    assert disabled.success is True
+    assert not_smaller.success is True
+    assert len(calls) == 2
+    assert all(display_id in calls[0] for display_id in ("[E-0001]", "[E-0002]", "[E-0003]"))
+    assert all(display_id in calls[1] for display_id in ("[E-0001]", "[E-0002]", "[E-0003]"))
+    assert disabled.warnings == []
+    assert not_smaller.warnings == []
+
+
+def test_real_extraction_prefilter_warning_and_relevance_warning_can_coexist(monkeypatch, tmp_path):
+    calls: list[str] = []
+
+    class FakeClient:
+        def generate_json(self, _system, user, schema):
+            calls.append(user)
+            display_id = re.search(r"\[(E-\d{4})\]", user).group(1)
+            return schema.model_validate(
+                {
+                    "events": [
+                        {
+                            "event_key": f"分队-发现-{display_id}",
+                            "title": "发现车辆",
+                            "evidence_ids": [display_id],
+                        }
+                    ]
+                }
+            )
+
+    evidence = [
+        {
+            "display_id": "E-0001",
+            "content": "目标车队在A镇发现3辆车。",
+            "content_summary": "目标车队在A镇发现3辆车。",
+            "file": {"id": "doc-a", "original_name": "a.txt"},
+            "locator": {"kind": "text"},
+        },
+        {
+            "display_id": "E-0002",
+            "content": " 目标车队在A镇发现3辆车。 ",
+            "content_summary": " 目标车队在A镇发现3辆车。 ",
+            "file": {"id": "doc-a", "original_name": "a.txt"},
+            "locator": {"kind": "text"},
+        },
+        {
+            "display_id": "E-0003",
+            "content": "天气晴朗，道路通畅。",
+            "content_summary": "天气晴朗，道路通畅。",
+            "file": {"id": "doc-b", "original_name": "b.txt"},
+            "locator": {"kind": "text"},
+        },
+    ]
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_relevance_top_k", 1, raising=False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_relevance_per_doc_min", 0, raising=False)
+
+    result = IntelligenceExtractSkill(llm_client=FakeClient()).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "目标车队 A镇"}, "evidence": evidence},
+    )
+
+    assert result.success is True
+    assert len(calls) == 1
+    assert "[E-0001]" in calls[0]
+    assert "[E-0002]" not in calls[0]
+    assert "[E-0003]" not in calls[0]
+    assert result.warnings == [
+        "为节省真实模型调用，已跳过 1 条重复证据、0 条空白/过短证据（原 3 条 → 实际抽取 2 条）",
+        "已按相关性预筛：从 2 条相关排序保留 1 条（每文档≥0，top_k=1），"
+        "其余 1 条未进入本次分析；如需全量请调大或关闭 EXTRACT_RELEVANCE_TOP_K",
+    ]
+
+
 def test_mock_extraction_does_not_prefilter_duplicate_evidence(monkeypatch, tmp_path):
     monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_min_evidence_chars", 100, raising=False)
     evidence = [

@@ -96,6 +96,8 @@ def test_extract_cost_controls_are_clamped_to_supported_ranges():
         EXTRACT_BATCH_MAX_CHARS=999,
         EXTRACT_MIN_EVIDENCE_CHARS=-1,
         EXTRACT_MAX_FILES_CONFIRM=-1,
+        EXTRACT_RELEVANCE_TOP_K=-1,
+        EXTRACT_RELEVANCE_PER_DOC_MIN=-1,
         EXTRACT_RATE_LIMIT_COOLDOWN_SEC=-1.0,
         EXTRACT_RATE_LIMIT_CIRCUIT_BREAKER=-1,
     )
@@ -106,6 +108,8 @@ def test_extract_cost_controls_are_clamped_to_supported_ranges():
         EXTRACT_BATCH_MAX_CHARS=999999,
         EXTRACT_MIN_EVIDENCE_CHARS=9999,
         EXTRACT_MAX_FILES_CONFIRM=999999,
+        EXTRACT_RELEVANCE_TOP_K=999999,
+        EXTRACT_RELEVANCE_PER_DOC_MIN=9999,
         EXTRACT_RATE_LIMIT_COOLDOWN_SEC=999.0,
         EXTRACT_RATE_LIMIT_CIRCUIT_BREAKER=9999,
     )
@@ -114,12 +118,16 @@ def test_extract_cost_controls_are_clamped_to_supported_ranges():
     assert too_low.extract_batch_max_chars == 1000
     assert too_low.extract_min_evidence_chars == 0
     assert too_low.extract_max_files_confirm == 0
+    assert too_low.extract_relevance_top_k == 0
+    assert too_low.extract_relevance_per_doc_min == 0
     assert too_low.extract_rate_limit_cooldown_sec == 0.0
     assert too_low.extract_rate_limit_circuit_breaker == 0
     assert too_high.extract_batch_max_items == 500
     assert too_high.extract_batch_max_chars == 120000
     assert too_high.extract_min_evidence_chars == 2000
     assert too_high.extract_max_files_confirm == 100000
+    assert too_high.extract_relevance_top_k == 100000
+    assert too_high.extract_relevance_per_doc_min == 1000
     assert too_high.extract_rate_limit_cooldown_sec == 120.0
     assert too_high.extract_rate_limit_circuit_breaker == 1000
 

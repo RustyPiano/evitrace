@@ -12,6 +12,7 @@ from app.config import settings
 from app.schemas_analysis import Entity, Event, ExtractionResult, FieldCitation, Quantity, TimelineItem
 from app.schemas import AppError
 from app.services.llm_client import LocalLLMClient
+from app.utils.relevance import select_relevant
 from app.utils.time_normalize import ParsedTime, parse_time_value
 
 from .base import ExtractionPersistence, RunCancelled, SkillContext, SkillManifest, SkillResult
@@ -586,6 +587,25 @@ class IntelligenceExtractSkill:
                 f"{prefilter_stats['dropped_duplicate']} 条重复证据、"
                 f"{prefilter_stats['dropped_low_signal']} 条空白/过短证据"
                 f"（原 {prefilter_stats['original']} 条 → 实际抽取 {prefilter_stats['kept']} 条）"
+            )
+        top_k = settings.extract_relevance_top_k
+        if top_k > 0 and len(filtered_items) > top_k:
+            kept_idx, rel_stats = select_relevant(
+                filtered_items,
+                objective,
+                top_k,
+                settings.extract_relevance_per_doc_min,
+                doc_key=lambda evidence: str(
+                    (evidence.get("file") or {}).get("id")
+                    or (evidence.get("file") or {}).get("original_name")
+                    or ""
+                ),
+            )
+            filtered_items = [filtered_items[index] for index in kept_idx]
+            warnings.append(
+                f"已按相关性预筛：从 {rel_stats['original']} 条相关排序保留 {rel_stats['kept']} 条"
+                f"（每文档≥{rel_stats['per_doc_min']}，top_k={rel_stats['top_k']}），"
+                f"其余 {rel_stats['dropped']} 条未进入本次分析；如需全量请调大或关闭 EXTRACT_RELEVANCE_TOP_K"
             )
         batches = _batch_evidence(filtered_items)
         total = len(batches)

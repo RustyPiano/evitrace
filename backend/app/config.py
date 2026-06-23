@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     extract_batch_max_chars: int = Field(default=12000, validation_alias="EXTRACT_BATCH_MAX_CHARS")
     extract_min_evidence_chars: int = Field(default=0, validation_alias="EXTRACT_MIN_EVIDENCE_CHARS")
     extract_max_files_confirm: int = Field(default=20, validation_alias="EXTRACT_MAX_FILES_CONFIRM")
+    extract_relevance_top_k: int = Field(default=0, validation_alias="EXTRACT_RELEVANCE_TOP_K")
+    extract_relevance_per_doc_min: int = Field(
+        default=1, validation_alias="EXTRACT_RELEVANCE_PER_DOC_MIN"
+    )
     extract_rate_limit_cooldown_sec: float = Field(
         default=5.0, validation_alias="EXTRACT_RATE_LIMIT_COOLDOWN_SEC"
     )
@@ -152,6 +156,16 @@ class Settings(BaseSettings):
     @classmethod
     def clamp_extract_max_files_confirm(cls, value: int) -> int:
         return min(max(value, 0), 100000)
+
+    @field_validator("extract_relevance_top_k")
+    @classmethod
+    def clamp_extract_relevance_top_k(cls, value: int) -> int:
+        return min(max(value, 0), 100000)
+
+    @field_validator("extract_relevance_per_doc_min")
+    @classmethod
+    def clamp_extract_relevance_per_doc_min(cls, value: int) -> int:
+        return min(max(value, 0), 1000)
 
     @field_validator("extract_rate_limit_cooldown_sec")
     @classmethod
