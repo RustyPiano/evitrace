@@ -136,6 +136,28 @@ def start_analysis_run(
     return {"data": {"run_id": run.id, "status": "queued"}, "message": "ok"}
 
 
+@router.post("/tasks/{task_id}/runs/{run_id}/resume", status_code=status.HTTP_202_ACCEPTED)
+def resume_analysis_run(
+    task_id: str,
+    run_id: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    run = orchestrator.resume_run(db, task_id, run_id, current_user)
+    record_audit(
+        db,
+        user_id=current_user.id,
+        action="analysis_resumed",
+        resource_type="task",
+        resource_id=task_id,
+        detail={"run_id": run.id},
+    )
+    db.commit()
+    background_tasks.add_task(orchestrator.execute_run, task_id, run.id)
+    return {"data": {"run_id": run.id, "status": "queued"}, "message": "ok"}
+
+
 @router.post("/tasks/{task_id}/runs/cancel")
 def cancel_analysis_run(
     task_id: str,

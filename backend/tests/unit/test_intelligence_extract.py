@@ -4,7 +4,9 @@ import threading
 import time
 
 import pytest
+from fastapi import status
 
+from app.schemas import AppError
 from app.skills.base import RunCancelled
 from app.skills.base import SkillContext
 from app.skills.intelligence_extract import (
@@ -52,6 +54,36 @@ def _many_evidence(count: int) -> list[dict]:
         }
         for index in range(count)
     ]
+
+
+class FakePersistence:
+    def __init__(self, done: dict[int, tuple[str, dict]] | None = None) -> None:
+        self.done = done or {}
+        self.records: list[tuple[int, str, str, dict | None, str | None, str | None, str]] = []
+        self.plan: tuple[int, int] | None = None
+        self.thread_name = threading.current_thread().name
+
+    def load_done(self) -> dict[int, tuple[str, dict]]:
+        assert threading.current_thread().name == self.thread_name
+        return dict(self.done)
+
+    def record_batch(
+        self,
+        batch_index: int,
+        input_hash: str,
+        status: str,
+        result: dict | None,
+        error_code: str | None,
+        error_message: str | None,
+    ) -> None:
+        assert threading.current_thread().name == self.thread_name
+        self.records.append((batch_index, input_hash, status, result, error_code, error_message, threading.current_thread().name))
+        if status == "done" and result is not None:
+            self.done[batch_index] = (input_hash, result)
+
+    def set_plan(self, total_batches: int, estimated_input_tokens: int) -> None:
+        assert threading.current_thread().name == self.thread_name
+        self.plan = (total_batches, estimated_input_tokens)
 
 
 def test_default_mock_extraction_uses_real_evidence_ids_and_sorted_timeline(tmp_path):
@@ -602,7 +634,176 @@ def test_real_extraction_cancels_pending_batches_and_propagates_run_cancelled(mo
     assert call_count <= progress[-1][0] + 2
 
 
-def test_real_extraction_fail_fast_does_not_run_unstarted_batches(monkeypatch, tmp_path):
+def test_real_extraction_persists_partial_results_and_resumes_only_failed_batch(monkeypatch, tmp_path):
+    calls: list[str] = []
+
+    class FakeClient:
+        def __init__(self, fail: bool) -> None:
+            self.fail = fail
+
+        def generate_json(self, _system, user, schema):
+            display_id = re.search(r"\[(E-\d{4})\]", user).group(1)
+            calls.append(display_id)
+            if self.fail and display_id == "E-0031":
+                raise AppError("LLM_RATE_LIMITED", "too many requests", status.HTTP_429_TOO_MANY_REQUESTS)
+            return schema.model_validate(
+                {
+                    "events": [
+                        {
+                            "event_key": f"分队-发现-{display_id}",
+                            "title": f"发现{display_id}",
+                            "time_text": "6月1日14:00",
+                            "location": f"地点{display_id}",
+                            "evidence_ids": [display_id],
+                            "confidence": 0.8,
+                        }
+                    ]
+                }
+            )
+
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_concurrency", 2, raising=False)
+    persistence = FakePersistence()
+
+    first = IntelligenceExtractSkill(llm_client=FakeClient(fail=True)).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _many_evidence(95)},
+        persistence=persistence,
+    )
+
+    assert first.success is True
+    assert first.metrics["batch_total"] == 4
+    assert first.metrics["batch_done"] == 3
+    assert first.metrics["batch_failed"] == 1
+    # 并发下批次按完成顺序记录，故按 status 过滤而非依赖位置（records[1] 是时序相关的）。
+    failed_records = [record for record in persistence.records if record[2] == "failed"]
+    assert [record[0] for record in failed_records] == [1]
+    assert failed_records[0][4] == "LLM_RATE_LIMITED"
+    assert "部分抽取失败：3/4 批成功、1 批失败" in first.warnings[-1]
+    assert [event["event_id"] for event in first.data["events"]] == ["EVT-001", "EVT-002", "EVT-003"]
+
+    calls.clear()
+    persistence.records.clear()
+    second = IntelligenceExtractSkill(llm_client=FakeClient(fail=False)).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _many_evidence(95)},
+        persistence=persistence,
+    )
+
+    assert second.success is True
+    assert calls == ["E-0031"]
+    assert second.metrics["batch_total"] == 4
+    assert second.metrics["batch_done"] == 4
+    assert second.metrics["batch_failed"] == 0
+    assert [event["event_id"] for event in second.data["events"]] == [
+        "EVT-001",
+        "EVT-002",
+        "EVT-003",
+        "EVT-004",
+    ]
+    assert [event["evidence_ids"][0] for event in second.data["events"]] == [
+        "E-0001",
+        "E-0031",
+        "E-0061",
+        "E-0091",
+    ]
+
+
+def test_real_extraction_ignores_done_cache_when_input_hash_mismatches(monkeypatch, tmp_path):
+    calls: list[str] = []
+    stale = ExtractionResult(
+        events=[Event(event_key="stale", title="stale", evidence_ids=["E-0001"])]
+    ).model_dump(mode="json")
+    persistence = FakePersistence(done={0: ("stale-hash", stale)})
+
+    class FakeClient:
+        def generate_json(self, _system, user, schema):
+            display_id = re.search(r"\[(E-\d{4})\]", user).group(1)
+            calls.append(display_id)
+            return schema.model_validate(
+                {
+                    "events": [
+                        {
+                            "event_key": f"fresh-{display_id}",
+                            "title": "fresh",
+                            "evidence_ids": [display_id],
+                        }
+                    ]
+                }
+            )
+
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+
+    result = IntelligenceExtractSkill(llm_client=FakeClient()).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _evidence()},
+        persistence=persistence,
+    )
+
+    assert result.success is True
+    assert calls == ["E-0001"]
+    assert result.data["events"][0]["event_key"] == "fresh-E-0001"
+
+
+def test_real_extraction_objective_change_invalidates_done_cache(monkeypatch, tmp_path):
+    calls: list[str] = []
+
+    class FakeClient:
+        def generate_json(self, _system, user, schema):
+            display_id = re.search(r"\[(E-\d{4})\]", user).group(1)
+            calls.append(display_id)
+            return schema.model_validate(
+                {"events": [{"event_key": f"k-{display_id}", "title": "t", "evidence_ids": [display_id]}]}
+            )
+
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+    persistence = FakePersistence()
+
+    first = IntelligenceExtractSkill(llm_client=FakeClient()).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "目标A"}, "evidence": _evidence()},
+        persistence=persistence,
+    )
+    assert first.success is True
+    assert calls == ["E-0001"]
+
+    # 同一证据、同一持久化，但任务目标改变 → input_hash 失配 → 必须重新抽取，不复用旧目标缓存。
+    calls.clear()
+    second = IntelligenceExtractSkill(llm_client=FakeClient()).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "目标B（不同）"}, "evidence": _evidence()},
+        persistence=persistence,
+    )
+    assert second.success is True
+    assert calls == ["E-0001"]
+
+
+def test_real_extraction_all_batches_failed_returns_success_with_zero_done_stats(monkeypatch, tmp_path):
+    class FakeClient:
+        def generate_json(self, _system, _user, _schema):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_batch_max_items", 1, raising=False)
+    persistence = FakePersistence()
+
+    result = IntelligenceExtractSkill(llm_client=FakeClient()).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _evidence()},
+        persistence=persistence,
+    )
+
+    assert result.success is True
+    assert result.data["events"] == []
+    assert result.metrics["batch_total"] == 2
+    assert result.metrics["batch_done"] == 0
+    assert result.metrics["batch_failed"] == 2
+    assert [record[2] for record in persistence.records] == ["failed", "failed"]
+    assert any("部分抽取失败：0/2 批成功、2 批失败" in warning for warning in result.warnings)
+    assert "真实模型未抽取到任何要素，请检查模型/提示词" in result.warnings
+
+
+def test_real_extraction_records_failed_batch_and_continues_unstarted_batches(monkeypatch, tmp_path):
     call_count = 0
 
     class FakeClient:
@@ -633,9 +834,11 @@ def test_real_extraction_fail_fast_does_not_run_unstarted_batches(monkeypatch, t
         {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _many_evidence(95)},
     )
 
-    assert result.success is False
-    assert "RuntimeError: boom" in result.errors[0]
-    assert call_count <= 2
+    assert result.success is True
+    assert result.metrics["batch_total"] == 4
+    assert result.metrics["batch_done"] == 3
+    assert result.metrics["batch_failed"] == 1
+    assert call_count == 4
 
 
 def test_merge_extractions_combines_evidence_ids_for_same_fact():

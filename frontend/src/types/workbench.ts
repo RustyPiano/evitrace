@@ -46,6 +46,11 @@ export interface RunStatus {
   current_step: string | null;
   warnings: string[];
   error_message: string | null;
+  resumable?: boolean;
+  total_batches?: number;
+  done_batches?: number;
+  failed_batches?: number;
+  estimated_input_tokens?: number;
 }
 
 export interface TaskRunSummary {
@@ -55,6 +60,11 @@ export interface TaskRunSummary {
   started_at: string | null;
   finished_at: string | null;
   has_result: boolean;
+  resumable?: boolean;
+  total_batches?: number;
+  done_batches?: number;
+  failed_batches?: number;
+  estimated_input_tokens?: number;
 }
 
 export interface AnalysisEntity {

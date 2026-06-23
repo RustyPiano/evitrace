@@ -18,6 +18,7 @@ from app.models import AnalysisResult, AuditLog, Evidence, SkillConfig, Task, Ta
 from app.schemas import AppError
 from app.services import orchestrator
 from app.skills.base import RunCancelled
+from app.skills.base import SkillResult
 
 from tests.conftest import login_headers
 
@@ -469,6 +470,7 @@ def test_execute_run_cancelled_during_extraction_finishes_cancelled_without_late
         assert run.status == RUN_STATUS_FAILED
         assert run.current_step == "cancelled"
         assert run.error_message == "分析已手动取消"
+        assert run.resumable is True
 
 
 def test_start_run_resets_historical_cancel_requested_flag(client, create_user):
@@ -522,6 +524,221 @@ def test_recover_interrupted_runs_marks_running_records_failed():
         assert run.status == RUN_STATUS_FAILED
         assert run.error_message == "服务重启导致运行中断，请重新执行"
         assert run.current_step == "failed"
+        assert run.resumable is True
+
+
+def test_resume_run_endpoint_resets_run_and_records_audit(client, create_user, monkeypatch):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    _upload_text(client, headers, task_id)
+    scheduled: list[tuple[str, str]] = []
+    monkeypatch.setattr(orchestrator, "execute_run", lambda task_id, run_id: scheduled.append((task_id, run_id)))
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        task.status = TASK_STATUS_FAILED
+        run = TaskRun(
+            task_id=task_id,
+            status=RUN_STATUS_FAILED,
+            current_step="failed",
+            progress=70,
+            resumable=True,
+            cancel_requested=True,
+            error_message="partial",
+            finished_at=datetime.now(timezone.utc),
+        )
+        db.add(run)
+        db.commit()
+        run_id = run.id
+
+    response = client.post(f"/api/v1/tasks/{task_id}/runs/{run_id}/resume", headers=headers)
+
+    assert response.status_code == 202
+    assert response.json()["data"] == {"run_id": run_id, "status": RUN_STATUS_QUEUED}
+    assert scheduled == [(task_id, run_id)]
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        run = db.get(TaskRun, run_id)
+        audit = db.query(AuditLog).filter(AuditLog.action == "analysis_resumed").one()
+        assert task.status == "queued"
+        assert run.status == RUN_STATUS_QUEUED
+        assert run.current_step == "queued"
+        assert run.cancel_requested is False
+        assert run.error_message is None
+        assert run.finished_at is None
+        assert run.resumable is True
+        assert run.progress == 0
+        assert run.total_batches == 0
+        assert run.done_batches == 0
+        assert run.failed_batches == 0
+        assert run.estimated_input_tokens == 0
+        assert audit.resource_id == task_id
+        assert audit.detail_json
+
+
+def test_resume_run_endpoint_rejects_non_resumable_run(client, create_user):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    with SessionLocal() as db:
+        run = TaskRun(task_id=task_id, status=RUN_STATUS_FAILED, resumable=False)
+        db.add(run)
+        db.commit()
+        run_id = run.id
+
+    response = client.post(f"/api/v1/tasks/{task_id}/runs/{run_id}/resume", headers=headers)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "RUN_NOT_RESUMABLE"
+
+
+def test_resume_run_endpoint_rejects_when_any_task_is_running(client, create_user):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    running_task_id = _create_task(client, headers, "Running")
+    with SessionLocal() as db:
+        db.get(Task, running_task_id).status = TASK_STATUS_PARSING
+        run = TaskRun(task_id=task_id, status=RUN_STATUS_FAILED, resumable=True)
+        db.add(run)
+        db.commit()
+        run_id = run.id
+
+    response = client.post(f"/api/v1/tasks/{task_id}/runs/{run_id}/resume", headers=headers)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "TASK_ALREADY_RUNNING"
+
+
+def test_execute_run_all_failed_extraction_marks_resumable_without_result(client, create_user, monkeypatch):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    file_id = _upload_text(client, headers, task_id)
+    with SessionLocal() as db:
+        owner = db.query(Task).filter(Task.id == task_id).one().owner
+        run = orchestrator.start_run(db, task_id, owner)
+        run_id = run.id
+
+    def fake_parse(_task_id: str, run_id: str | None = None, **_kwargs):
+        with SessionLocal() as db:
+            db.add(
+                Evidence(
+                    display_id="E-0001",
+                    task_id=_task_id,
+                    run_id=run_id,
+                    file_id=file_id,
+                    modality="text",
+                    evidence_type="paragraph",
+                    content="6月1日14:00，车队在地点A发现3辆车。",
+                    locator_json="{}",
+                    skill_id="document_parse",
+                )
+            )
+            db.commit()
+        return orchestrator.parse_service.ParseSummary(task_id=_task_id, run_id=run_id)
+
+    class AllFailedExtract:
+        def run(self, _context, _payload, **_kwargs):
+            return SkillResult(
+                success=True,
+                warnings=["部分抽取失败：0/1 批成功、1 批失败（可在工作台『继续分析』续跑补齐）"],
+                data={"entities": [], "events": [], "timeline": []},
+                metrics={"batch_total": 1, "batch_done": 0, "batch_failed": 1},
+            )
+
+    monkeypatch.setattr(orchestrator.parse_service, "parse_all_files", fake_parse)
+    monkeypatch.setattr(orchestrator, "IntelligenceExtractSkill", AllFailedExtract)
+
+    orchestrator.execute_run(task_id, run_id)
+
+    with SessionLocal() as db:
+        run = db.get(TaskRun, run_id)
+        assert run.status == RUN_STATUS_FAILED
+        assert run.resumable is True
+        assert run.total_batches == 1
+        assert run.done_batches == 0
+        assert run.failed_batches == 1
+        assert run.error_message == "全部抽取批次失败，可在工作台续跑"
+        assert db.query(AnalysisResult).filter(AnalysisResult.run_id == run_id).count() == 0
+
+
+def test_execute_run_reuses_existing_evidence_and_upserts_result_on_resume(client, create_user, monkeypatch):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    file_id = _upload_text(client, headers, task_id)
+    with SessionLocal() as db:
+        owner = db.query(Task).filter(Task.id == task_id).one().owner
+        run = orchestrator.start_run(db, task_id, owner)
+        run_id = run.id
+        db.add(
+            Evidence(
+                display_id="E-0001",
+                task_id=task_id,
+                run_id=run_id,
+                file_id=file_id,
+                modality="text",
+                evidence_type="paragraph",
+                content="6月1日14:00，车队在地点A发现3辆车。",
+                locator_json="{}",
+                skill_id="document_parse",
+            )
+        )
+        existing = AnalysisResult(
+            task_id=task_id,
+            run_id=run_id,
+            entities_json="[]",
+            events_json="[]",
+            timeline_json="[]",
+            conflicts_json="[]",
+            report_markdown="old",
+            citation_check_json="{}",
+        )
+        db.add(existing)
+        db.commit()
+        result_id = existing.id
+
+    def unexpected_parse(*_args, **_kwargs):
+        raise AssertionError("resume must reuse existing evidence")
+
+    class Extract:
+        def run(self, _context, _payload, **_kwargs):
+            return SkillResult(
+                success=True,
+                data={
+                    "entities": [{"type": "location", "name": "地点A", "confidence": 0.8, "evidence_ids": ["E-0001"]}],
+                    "events": [{"event_id": "EVT-001", "event_key": "车队-发现-车辆", "title": "发现车辆", "evidence_ids": ["E-0001"]}],
+                    "timeline": [{"event_id": "EVT-001", "event_key": "车队-发现-车辆", "title": "发现车辆", "time_text": None, "time_normalized": None, "time_group": "时间未确定", "location": None, "time_evidence_ids": [], "evidence_ids": ["E-0001"]}],
+                },
+                metrics={"batch_total": 1, "batch_done": 1, "batch_failed": 0},
+            )
+
+    class NoConflicts:
+        def run(self, *_args, **_kwargs):
+            return SkillResult(success=True, data={"conflicts": []})
+
+    class Report:
+        def run(self, *_args, **_kwargs):
+            return SkillResult(success=True, data={"report_markdown": "new", "citation_check": {"invalid_citations": []}})
+
+    monkeypatch.setattr(orchestrator.parse_service, "parse_all_files", unexpected_parse)
+    monkeypatch.setattr(orchestrator, "IntelligenceExtractSkill", Extract)
+    monkeypatch.setattr(orchestrator, "ConflictDetectSkill", NoConflicts)
+    monkeypatch.setattr(orchestrator, "ReportGenerateSkill", Report)
+
+    orchestrator.execute_run(task_id, run_id)
+
+    with SessionLocal() as db:
+        results = db.query(AnalysisResult).filter(AnalysisResult.run_id == run_id).all()
+        run = db.get(TaskRun, run_id)
+        assert len(results) == 1
+        assert results[0].id == result_id
+        assert results[0].report_markdown == "new"
+        assert run.resumable is False
+        assert run.total_batches == 1
+        assert run.done_batches == 1
+        assert run.failed_batches == 0
 
 
 def test_execute_run_exception_marks_run_failed_terminal(client, create_user, monkeypatch):

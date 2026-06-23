@@ -1,4 +1,5 @@
 import json
+from hashlib import sha256
 import unicodedata
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
@@ -8,13 +9,15 @@ from datetime import date, datetime, time, timezone
 
 from app.config import settings
 from app.schemas_analysis import Entity, Event, ExtractionResult, FieldCitation, Quantity, TimelineItem
+from app.schemas import AppError
 from app.services.llm_client import LocalLLMClient
 from app.utils.time_normalize import ParsedTime, parse_time_value
 
-from .base import RunCancelled, SkillContext, SkillManifest, SkillResult
+from .base import ExtractionPersistence, RunCancelled, SkillContext, SkillManifest, SkillResult
 
 BATCH_MAX_ITEMS = 30
 BATCH_MAX_CHARS = 12_000
+PROMPT_VERSION = "extract-v1"
 
 
 def _normalize_key(value: str | None) -> str:
@@ -395,6 +398,7 @@ class IntelligenceExtractSkill:
         payload: Any,
         progress_callback: Callable[[int, int], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
+        persistence: ExtractionPersistence | None = None,
     ) -> SkillResult:
         started = perf_counter()
         evidence_items = list(payload.get("evidence") or [])
@@ -407,12 +411,14 @@ class IntelligenceExtractSkill:
                 raw = _load_fixture(context) or _default_mock_raw(evidence_items)
                 extraction, sanitize_warnings = _sanitize_extraction(raw, evidence_items)
                 warnings.extend(sanitize_warnings)
+                stats = {"total": 1, "done": 1, "failed": 0}
             else:
-                extraction, real_warnings = self._run_real_extraction(
+                extraction, real_warnings, stats = self._run_real_extraction(
                     payload,
                     evidence_items,
                     progress_callback=progress_callback,
                     cancel_check=cancel_check,
+                    persistence=persistence,
                 )
                 warnings.extend(real_warnings)
         except RunCancelled:
@@ -439,6 +445,9 @@ class IntelligenceExtractSkill:
                 "duration_ms": int((perf_counter() - started) * 1000),
                 "entity_count": len(extraction.entities),
                 "event_count": len(extraction.events),
+                "batch_total": stats["total"],
+                "batch_done": stats["done"],
+                "batch_failed": stats["failed"],
             },
         )
 
@@ -448,7 +457,8 @@ class IntelligenceExtractSkill:
         evidence_items: list[dict[str, Any]],
         progress_callback: Callable[[int, int], None] | None = None,
         cancel_check: Callable[[], bool] | None = None,
-    ) -> tuple[ExtractionResult, list[str]]:
+        persistence: ExtractionPersistence | None = None,
+    ) -> tuple[ExtractionResult, list[str], dict[str, int]]:
         client = self.llm_client or LocalLLMClient()
         task = payload.get("task") or {}
         system_prompt = (
@@ -526,8 +536,8 @@ class IntelligenceExtractSkill:
             "}"
         )
 
-        def extract_batch(batch: list[dict[str, Any]]) -> tuple[ExtractionResult, list[str]]:
-            user_prompt = "\n".join(
+        def build_user_prompt(batch: list[dict[str, Any]]) -> str:
+            return "\n".join(
                 [
                     f"任务目标：{task.get('objective') or ''}",
                     "请按目标 JSON schema 抽取。evidence_ids 只能使用下列证据编号；同一真实事件必须复用相同 event_key。",
@@ -535,6 +545,28 @@ class IntelligenceExtractSkill:
                     *[_format_evidence_for_prompt(evidence) for evidence in batch],
                 ]
             )
+
+        model = getattr(client, "model", settings.local_llm_model)
+        # 把所有影响抽取输出的 prompt 输入纳入 hash：提示词版本 + 模型 + 任务目标 + 本批证据内容。
+        # 否则改了任务目标后续跑会复用旧目标下的已完成批，结果语义混合且不确定。
+        objective = str(task.get("objective") or "")
+
+        def batch_hash(batch: list[dict[str, Any]]) -> str:
+            # 用 JSON 结构化编码（字符串自动转义、字段独立成元素）做无歧义指纹，
+            # 避免裸分隔符拼接在字段含分隔符时产生跨字段碰撞。
+            hash_input = json.dumps(
+                [
+                    PROMPT_VERSION,
+                    str(model),
+                    objective,
+                    [[e["display_id"], _evidence_text(e)] for e in batch],
+                ],
+                ensure_ascii=False,
+            )
+            return sha256(hash_input.encode("utf-8")).hexdigest()
+
+        def extract_batch(batch: list[dict[str, Any]]) -> tuple[ExtractionResult, list[str]]:
+            user_prompt = build_user_prompt(batch)
             result = client.generate_json(system_prompt, user_prompt, ExtractionResult)
             raw = result.model_dump(mode="json")
             return _sanitize_extraction(raw, batch)
@@ -553,6 +585,12 @@ class IntelligenceExtractSkill:
             )
         batches = _batch_evidence(filtered_items)
         total = len(batches)
+        input_hashes = [batch_hash(batch) for batch in batches]
+        estimated_input_tokens = sum(len(system_prompt) + len(build_user_prompt(batch)) for batch in batches) // 3
+        done_map = {}
+        if persistence is not None:
+            persistence.set_plan(total, estimated_input_tokens)
+            done_map = persistence.load_done()
         done = 0
         executor = ThreadPoolExecutor(max_workers=settings.extract_concurrency)
         pending: set[Future[tuple[ExtractionResult, list[str]]]] = set()
@@ -560,9 +598,21 @@ class IntelligenceExtractSkill:
         results: dict[int, ExtractionResult] = {}
         next_idx = 0
 
+        for index, input_hash in enumerate(input_hashes):
+            cached = done_map.get(index)
+            if cached is None or cached[0] != input_hash:
+                continue
+            results[index] = ExtractionResult.model_validate(cached[1])
+            done += 1
+            if progress_callback is not None:
+                progress_callback(done, total)
+
         def submit_until_window_full() -> None:
             nonlocal next_idx
             while len(pending) < settings.extract_concurrency and next_idx < total:
+                if next_idx in results:
+                    next_idx += 1
+                    continue
                 if cancel_check is not None and cancel_check():
                     raise RunCancelled()
                 future = executor.submit(extract_batch, batches[next_idx])
@@ -576,9 +626,33 @@ class IntelligenceExtractSkill:
                 completed, pending = wait(pending, return_when=FIRST_COMPLETED)
                 for future in completed:
                     index = fut_index.pop(future)
-                    sanitized, sanitize_warnings = future.result()
+                    try:
+                        sanitized, sanitize_warnings = future.result()
+                    except RunCancelled:
+                        raise
+                    except Exception as exc:
+                        if persistence is not None:
+                            error_code = exc.code if isinstance(exc, AppError) else type(exc).__name__
+                            persistence.record_batch(
+                                index,
+                                input_hashes[index],
+                                "failed",
+                                None,
+                                error_code,
+                                str(exc)[:500],
+                            )
+                        continue
                     results[index] = sanitized
                     warnings.extend(sanitize_warnings)
+                    if persistence is not None:
+                        persistence.record_batch(
+                            index,
+                            input_hashes[index],
+                            "done",
+                            sanitized.model_dump(mode="json"),
+                            None,
+                            None,
+                        )
                     done += 1
                     if progress_callback is not None:
                         progress_callback(done, total)
@@ -589,6 +663,12 @@ class IntelligenceExtractSkill:
             executor.shutdown(wait=False, cancel_futures=True)
         extractions = [results[index] for index in sorted(results)]
         merged = _merge_extractions(extractions)
+        done_count = len(results)
+        failed_count = total - done_count
+        if failed_count > 0:
+            warnings.append(
+                f"部分抽取失败：{done_count}/{total} 批成功、{failed_count} 批失败（可在工作台『继续分析』续跑补齐）"
+            )
         if not merged.entities and not merged.events:
             warnings.append("真实模型未抽取到任何要素，请检查模型/提示词")
-        return merged, warnings
+        return merged, warnings, {"total": total, "done": done_count, "failed": failed_count}

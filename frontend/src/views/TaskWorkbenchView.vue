@@ -31,6 +31,15 @@
       <div class="workbench-actions">
         <el-progress v-if="isSelectedLatestRun" class="top-progress" :percentage="latestRun?.progress ?? 0" />
         <el-button
+          v-if="canResumeLatestRun"
+          type="primary"
+          plain
+          :loading="analysisResuming"
+          @click="resumeAnalysis"
+        >
+          继续分析（续跑）
+        </el-button>
+        <el-button
           type="primary"
           :loading="analysisStarting"
           :disabled="!canStartAnalysis"
@@ -82,6 +91,15 @@
       >
         <template #title>
           <span>{{ latestRun?.error_message || task.last_error || "分析失败" }}</span>
+          <el-button
+            v-if="canResumeLatestRun"
+            link
+            type="primary"
+            :loading="analysisResuming"
+            @click="resumeAnalysis"
+          >
+            继续分析（续跑）
+          </el-button>
           <el-button link type="primary" :loading="analysisStarting" @click="startAnalysis">重试</el-button>
         </template>
       </el-alert>
@@ -98,6 +116,13 @@
         <aside class="workbench-left">
           <FileList :files="task.files" :running="isRunning" @deleted="refreshAll" />
           <RunProgress :run="selectedRunProgress" />
+          <div v-if="batchSurface" class="batch-surface">
+            <span>{{ batchSurface.extract }}</span>
+            <el-tag v-if="batchSurface.failed" type="warning" effect="plain">
+              {{ batchSurface.failed }}
+            </el-tag>
+            <span v-if="batchSurface.tokens">{{ batchSurface.tokens }}</span>
+          </div>
         </aside>
 
         <main class="workbench-center">
@@ -193,6 +218,7 @@ const evidenceItems = ref<EvidenceIndexItem[]>([]);
 const evidenceTotal = ref(0);
 const selectedEvidenceId = ref<string | null>(null);
 const analysisStarting = ref(false);
+const analysisResuming = ref(false);
 const analysisCancelling = ref(false);
 const completing = ref(false);
 const forceComplete = ref(false);
@@ -206,6 +232,15 @@ const isSelectedLatestRun = computed(
   () => Boolean(latestRun.value && selectedRunId.value === latestRun.value.run_id)
 );
 const isSelectedRunRunning = computed(() => isSelectedLatestRun.value && isLatestRunRunning.value);
+const canResumeLatestRun = computed(() => {
+  if (!latestRun.value || analysisResuming.value || isLatestRunRunning.value) {
+    return false;
+  }
+  return Boolean(
+    latestRun.value.resumable &&
+      (latestRun.value.status === "failed" || latestRun.value.status === "succeeded")
+  );
+});
 const selectedRunProgress = computed<RunStatus | null>(() => {
   if (isSelectedLatestRun.value) {
     return latestRun.value;
@@ -221,7 +256,12 @@ const selectedRunProgress = computed<RunStatus | null>(() => {
     progress: run.progress,
     current_step: null,
     warnings: [],
-    error_message: null
+    error_message: null,
+    resumable: run.resumable,
+    total_batches: run.total_batches,
+    done_batches: run.done_batches,
+    failed_batches: run.failed_batches,
+    estimated_input_tokens: run.estimated_input_tokens
   };
 });
 const citationCoverage = computed(() => analysisResult.value?.citation_check?.citation_coverage ?? 0);
@@ -273,6 +313,21 @@ const overviewStats = computed(() => [
   { label: "冲突数", value: String(activeConflictCount.value) },
   { label: "引用覆盖率", value: formatPercent(citationCoverage.value) }
 ]);
+const batchSurface = computed(() => {
+  const run = selectedRunProgress.value;
+  const total = run?.total_batches ?? 0;
+  if (!run || total <= 0) {
+    return null;
+  }
+  const done = run.done_batches ?? 0;
+  const failed = run.failed_batches ?? 0;
+  const estimatedTokens = run.estimated_input_tokens ?? 0;
+  return {
+    extract: `提取 ${done}/${total}`,
+    failed: failed > 0 ? `失败 ${failed}（可续跑）` : "",
+    tokens: estimatedTokens > 0 ? `预计输入 ≈${estimatedTokens.toLocaleString()} token（估算）` : ""
+  };
+});
 const timelineItems = computed<TimelineItem[]>(() => {
   if (!analysisResult.value) {
     return [];
@@ -401,7 +456,12 @@ async function startAnalysis(confirmLarge = false) {
       progress: 0,
       current_step: "queued",
       warnings: [],
-      error_message: null
+      error_message: null,
+      resumable: false,
+      total_batches: 0,
+      done_batches: 0,
+      failed_batches: 0,
+      estimated_input_tokens: 0
     };
     task.value.status = "queued";
     analysisCancelling.value = false;
@@ -428,6 +488,35 @@ async function startAnalysis(confirmLarge = false) {
     ElMessage.error(extractErrorMessage(error, "启动分析失败"));
   } finally {
     analysisStarting.value = false;
+  }
+}
+
+async function resumeAnalysis() {
+  if (!task.value || !latestRun.value) {
+    return;
+  }
+  analysisResuming.value = true;
+  errorMessage.value = "";
+  try {
+    const response = await apiClient.post<{ data: { run_id: string; status: string } }>(
+      `/tasks/${task.value.id}/runs/${latestRun.value.run_id}/resume`
+    );
+    latestRun.value = {
+      ...latestRun.value,
+      status: response.data.data.status,
+      progress: latestRun.value.progress,
+      current_step: "queued",
+      error_message: null
+    };
+    selectedRunId.value = response.data.data.run_id;
+    task.value.status = "queued";
+    analysisCancelling.value = false;
+    await loadRuns(response.data.data.run_id);
+    startPolling();
+  } catch (error) {
+    ElMessage.error(extractErrorMessage(error, "续跑分析失败"));
+  } finally {
+    analysisResuming.value = false;
   }
 }
 

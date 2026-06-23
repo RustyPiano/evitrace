@@ -89,12 +89,36 @@ class TaskRun(Base):
     current_step: Mapped[str | None] = mapped_column(Text, nullable=True)
     warnings_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    resumable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    total_batches: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    done_batches: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    failed_batches: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    estimated_input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     task: Mapped[Task] = relationship(back_populates="runs")
     analysis_results: Mapped[list["AnalysisResult"]] = relationship(back_populates="run")
+
+
+class ExtractionBatch(Base):
+    __tablename__ = "extraction_batches"
+    __table_args__ = (UniqueConstraint("run_id", "batch_index", name="uq_extraction_batch_run_index"),)
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=uuid_text)
+    run_id: Mapped[str] = mapped_column(Text, ForeignKey("task_runs.id"), nullable=False, index=True)
+    batch_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    input_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now
+    )
 
 
 class Evidence(Base):
@@ -173,6 +197,7 @@ __all__ = [
     "AuditLog",
     "Base",
     "Evidence",
+    "ExtractionBatch",
     "SkillConfig",
     "Task",
     "TaskFile",

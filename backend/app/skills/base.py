@@ -7,6 +7,25 @@ class RunCancelled(Exception):
     pass
 
 
+class ExtractionPersistence(Protocol):
+    def load_done(self) -> dict[int, tuple[str, dict]]:
+        ...
+
+    def record_batch(
+        self,
+        batch_index: int,
+        input_hash: str,
+        status: str,
+        result: dict | None,
+        error_code: str | None,
+        error_message: str | None,
+    ) -> None:
+        ...
+
+    def set_plan(self, total_batches: int, estimated_input_tokens: int) -> None:
+        ...
+
+
 class SkillManifest(BaseModel):
     id: str
     name: str

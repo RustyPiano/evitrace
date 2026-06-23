@@ -136,6 +136,23 @@ def _migrate_sqlite_schema(connection) -> None:
         except Exception as exc:  # pragma: no cover - defensive startup migration
             logger.warning("SQLite migration could not add task_runs.cancel_requested: %s", type(exc).__name__)
 
+    task_run_add_columns = {
+        "resumable": "ALTER TABLE task_runs ADD COLUMN resumable BOOLEAN NOT NULL DEFAULT 0",
+        "total_batches": "ALTER TABLE task_runs ADD COLUMN total_batches INTEGER NOT NULL DEFAULT 0",
+        "done_batches": "ALTER TABLE task_runs ADD COLUMN done_batches INTEGER NOT NULL DEFAULT 0",
+        "failed_batches": "ALTER TABLE task_runs ADD COLUMN failed_batches INTEGER NOT NULL DEFAULT 0",
+        "estimated_input_tokens": (
+            "ALTER TABLE task_runs ADD COLUMN estimated_input_tokens INTEGER NOT NULL DEFAULT 0"
+        ),
+    }
+    for column_name, statement in task_run_add_columns.items():
+        if task_run_columns and column_name not in task_run_columns:
+            try:
+                connection.exec_driver_sql(statement)
+                logger.info("SQLite migration added task_runs.%s", column_name)
+            except Exception as exc:  # pragma: no cover - defensive startup migration
+                logger.warning("SQLite migration could not add task_runs.%s: %s", column_name, type(exc).__name__)
+
     try:
         evidence_columns = _sqlite_table_columns(connection, "evidence")
     except Exception as exc:  # pragma: no cover - defensive startup migration

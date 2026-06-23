@@ -22,7 +22,7 @@ from app.constants import (
     TASK_STATUS_QUEUED,
 )
 from app.database import SessionLocal
-from app.models import AnalysisResult, Evidence, Task, TaskFile, TaskRun
+from app.models import AnalysisResult, Evidence, ExtractionBatch, Task, TaskFile, TaskRun, utc_now
 from app.schemas import AppError
 from app.services import parse_service, result_service, run_guard
 from app.services.storage_service import PARSER_SKILL_BY_MODALITY
@@ -176,6 +176,70 @@ def _list_evidence(db: Session, run_id: str) -> list[dict[str, Any]]:
     return [_serialize_evidence_for_analysis(row) for row in rows]
 
 
+class _RunBatchPersistence:
+    def __init__(self, db: Session, run_id: str) -> None:
+        self.db = db
+        self.run_id = run_id
+
+    def load_done(self) -> dict[int, tuple[str, dict]]:
+        rows = (
+            self.db.query(ExtractionBatch)
+            .filter(ExtractionBatch.run_id == self.run_id, ExtractionBatch.status == "done")
+            .all()
+        )
+        done: dict[int, tuple[str, dict]] = {}
+        for row in rows:
+            if row.result_json is None:
+                continue
+            done[row.batch_index] = (row.input_hash, _json_load(row.result_json, {}))
+        return done
+
+    def record_batch(
+        self,
+        batch_index: int,
+        input_hash: str,
+        status: str,
+        result: dict | None,
+        error_code: str | None,
+        error_message: str | None,
+    ) -> None:
+        row = (
+            self.db.query(ExtractionBatch)
+            .filter(ExtractionBatch.run_id == self.run_id, ExtractionBatch.batch_index == batch_index)
+            .one_or_none()
+        )
+        result_json = _json_dump(result) if result is not None else None
+        if row is None:
+            row = ExtractionBatch(
+                run_id=self.run_id,
+                batch_index=batch_index,
+                input_hash=input_hash,
+                status=status,
+                attempt_count=1,
+                result_json=result_json,
+                error_code=error_code,
+                error_message=error_message,
+            )
+            self.db.add(row)
+        else:
+            row.input_hash = input_hash
+            row.status = status
+            row.attempt_count += 1
+            row.result_json = result_json
+            row.error_code = error_code
+            row.error_message = error_message
+            row.updated_at = utc_now()
+        self.db.commit()
+
+    def set_plan(self, total_batches: int, estimated_input_tokens: int) -> None:
+        run = self.db.get(TaskRun, self.run_id)
+        if run is None:
+            return
+        run.total_batches = total_batches
+        run.estimated_input_tokens = estimated_input_tokens
+        self.db.commit()
+
+
 def _task_payload(task: Task) -> dict[str, Any]:
     return {
         "id": task.id,
@@ -217,6 +281,38 @@ def start_run(db: Session, task_id: str, current_user, confirm_large: bool = Fal
         db.add(run)
         db.flush()
         run.plan_json = _json_dump(_build_plan(run.id, files))
+        task.status = TASK_STATUS_QUEUED
+        task.last_error = None
+        db.commit()
+        db.refresh(run)
+        return run
+
+
+def resume_run(db: Session, task_id: str, run_id: str, current_user) -> TaskRun:
+    with run_guard.single_run_start_lock():
+        task = ensure_task_access(db, task_id, current_user)
+        run = db.get(TaskRun, run_id)
+        if run is None or run.task_id != task.id:
+            raise AppError("TASK_NOT_FOUND", "任务不存在或无权访问", status.HTTP_404_NOT_FOUND)
+        if not run.resumable:
+            raise AppError("RUN_NOT_RESUMABLE", "该运行不可续跑", status.HTTP_409_CONFLICT)
+        if task.status in TASK_RUNNING_STATUSES:
+            raise AppError("TASK_ALREADY_RUNNING", "已有任务运行", status.HTTP_409_CONFLICT)
+        run_guard.ensure_no_active_run(db)
+        _ensure_required_skills_enabled(db)
+        run.status = RUN_STATUS_QUEUED
+        run.current_step = "queued"
+        run.cancel_requested = False
+        run.error_message = None
+        run.finished_at = None
+        run.started_at = _now()
+        # 重置展示型执行字段，避免续跑时进度被 _update_state 的 max() 卡在旧值、
+        # 或在重新进入抽取前短暂暴露过期批次计数。保留 resumable 与已有 extraction_batches。
+        run.progress = 0
+        run.total_batches = 0
+        run.done_batches = 0
+        run.failed_batches = 0
+        run.estimated_input_tokens = 0
         task.status = TASK_STATUS_QUEUED
         task.last_error = None
         db.commit()
@@ -285,17 +381,25 @@ def execute_run(task_id: str, run_id: str) -> None:
             if cancel_check():
                 raise RunCancelled()
 
-            _update_state(db, task, run, task_status=TASK_STATUS_PARSING, progress=10, current_step="parsing")
-            parse_summary = parse_service.parse_all_files(
-                task_id,
-                run_id=run.id,
-                progress_start=10,
-                progress_end=45,
-                cancel_check=cancel_check,
-            )
-            warnings.extend(parse_summary.warnings)
-            warnings.extend(parse_summary.errors)
-            _update_state(db, task, run, task_status=TASK_STATUS_PARSING, progress=45, current_step="parsing")
+            # 续跑优化：该 run 已有证据则跳过解析、直接复用。绝大多数中断发生在抽取阶段
+            # （已被批级续跑覆盖），那时证据是完整的。已知边界：若上次恰好在解析中途中断、
+            # 只写入了部分证据，续跑会按这部分残缺证据继续——可点「重新分析」走全新一轮规避。
+            existing_evidence_count = db.query(Evidence).filter(Evidence.run_id == run.id).count()
+            if existing_evidence_count > 0:
+                logger.info("resume: reuse %s evidence for run_id=%s", existing_evidence_count, run.id)
+                _update_state(db, task, run, task_status=TASK_STATUS_PARSING, progress=45, current_step="parsing")
+            else:
+                _update_state(db, task, run, task_status=TASK_STATUS_PARSING, progress=10, current_step="parsing")
+                parse_summary = parse_service.parse_all_files(
+                    task_id,
+                    run_id=run.id,
+                    progress_start=10,
+                    progress_end=45,
+                    cancel_check=cancel_check,
+                )
+                warnings.extend(parse_summary.warnings)
+                warnings.extend(parse_summary.errors)
+                _update_state(db, task, run, task_status=TASK_STATUS_PARSING, progress=45, current_step="parsing")
             if cancel_check():
                 raise RunCancelled()
 
@@ -311,13 +415,15 @@ def execute_run(task_id: str, run_id: str) -> None:
             context = SkillContext(task_id=task.id, run_id=run.id, data_root=str(settings.data_root_path))
             def extract_progress(done: int, total: int) -> None:
                 progress = min(70, 55 + int(15 * done / max(total, 1)))
+                failed = run.failed_batches
+                suffix = f" failed {failed}" if failed else ""
                 _update_state(
                     db,
                     task,
                     run,
                     task_status=TASK_STATUS_EXTRACTING,
                     progress=progress,
-                    current_step=f"extracting {done}/{total}",
+                    current_step=f"extracting {done}/{total}{suffix}",
                 )
 
             extract_result = IntelligenceExtractSkill().run(
@@ -325,6 +431,7 @@ def execute_run(task_id: str, run_id: str) -> None:
                 {"task": _task_payload(task), "evidence": evidence_items},
                 progress_callback=extract_progress,
                 cancel_check=cancel_check,
+                persistence=_RunBatchPersistence(db, run.id),
             )
             if not extract_result.success:
                 raise AppError(
@@ -333,6 +440,23 @@ def execute_run(task_id: str, run_id: str) -> None:
                     status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
             warnings.extend(extract_result.warnings)
+            batch_total = int(extract_result.metrics.get("batch_total") or 0)
+            batch_done = int(extract_result.metrics.get("batch_done") or 0)
+            batch_failed = int(extract_result.metrics.get("batch_failed") or 0)
+            run.total_batches = batch_total
+            run.done_batches = batch_done
+            run.failed_batches = batch_failed
+            if batch_done == 0 and batch_total > 0:
+                run.resumable = True
+                _set_warnings(run, warnings)
+                db.commit()
+                raise AppError(
+                    "ANALYSIS_FAILED",
+                    "全部抽取批次失败，可在工作台续跑",
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            run.resumable = batch_failed > 0 and batch_done > 0
+            db.commit()
             entities = extract_result.data["entities"]
             events = extract_result.data["events"]
             timeline = extract_result.data["timeline"]
@@ -377,17 +501,16 @@ def execute_run(task_id: str, run_id: str) -> None:
             report_markdown = report_result.data["report_markdown"]
             citation_check = report_result.data["citation_check"]
 
-            result = AnalysisResult(
-                task_id=task.id,
-                run_id=run.id,
-                entities_json=_json_dump(entities),
-                events_json=_json_dump(events),
-                timeline_json=_json_dump(timeline),
-                conflicts_json=_json_dump(conflicts),
-                report_markdown=report_markdown,
-                citation_check_json=_json_dump(citation_check),
-            )
-            db.add(result)
+            result = db.query(AnalysisResult).filter(AnalysisResult.run_id == run.id).one_or_none()
+            if result is None:
+                result = AnalysisResult(task_id=task.id, run_id=run.id)
+                db.add(result)
+            result.entities_json = _json_dump(entities)
+            result.events_json = _json_dump(events)
+            result.timeline_json = _json_dump(timeline)
+            result.conflicts_json = _json_dump(conflicts)
+            result.report_markdown = report_markdown
+            result.citation_check_json = _json_dump(citation_check)
             _set_warnings(run, warnings)
             run.finished_at = _now()
             _update_state(
@@ -410,6 +533,7 @@ def execute_run(task_id: str, run_id: str) -> None:
                 run.error_message = final_error_message
                 run.finished_at = _now()
                 run.current_step = "cancelled"
+                run.resumable = True
                 _set_warnings(run, warnings)
             if task is not None:
                 task.status = TASK_STATUS_FAILED
@@ -426,6 +550,8 @@ def execute_run(task_id: str, run_id: str) -> None:
                 run.error_message = final_error_message
                 run.finished_at = _now()
                 run.current_step = "failed"
+                if run.total_batches > 0 or run.done_batches > 0 or run.failed_batches > 0:
+                    run.resumable = True
                 _set_warnings(run, warnings)
             if task is not None:
                 task.status = TASK_STATUS_FAILED
@@ -447,6 +573,7 @@ def recover_interrupted_runs() -> None:
             run.error_message = INTERRUPTED_MESSAGE
             run.finished_at = _now()
             run.current_step = "failed"
+            run.resumable = True
             task = db.get(Task, run.task_id)
             if task is not None and task.status in TASK_RUNNING_STATUSES:
                 task.status = TASK_STATUS_FAILED
@@ -476,4 +603,9 @@ def serialize_run(run: TaskRun) -> dict[str, Any]:
         "current_step": run.current_step,
         "warnings": _warnings(run),
         "error_message": run.error_message,
+        "resumable": run.resumable,
+        "total_batches": run.total_batches,
+        "done_batches": run.done_batches,
+        "failed_batches": run.failed_batches,
+        "estimated_input_tokens": run.estimated_input_tokens,
     }
