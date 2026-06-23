@@ -4,7 +4,7 @@ from app.config import settings
 from app.models import Task, TaskFile
 from app.services.task_service import serialize_file
 from app.skills.base import SkillContext
-from app.skills.document_parse import DocumentParseSkill
+from app.skills.document_parse import DocumentParseSkill, _hard_split, _merge_to_chunks, _paragraph_spans
 from app.database import SessionLocal
 
 
@@ -45,13 +45,15 @@ def test_txt_parse_splits_on_blank_lines_and_skips_empty_blocks(tmp_path):
 
     assert result.success is True
     evidence = result.data["evidence"]
-    assert [item["content"] for item in evidence] == ["Alpha paragraph", "Beta paragraph"]
+    assert len(evidence) == 1
+    assert "Alpha paragraph" in evidence[0]["content"]
+    assert "Beta paragraph" in evidence[0]["content"]
     assert evidence[0]["locator"] == {
         "kind": "text",
         "page": None,
         "paragraph": 1,
         "char_start": 0,
-        "char_end": 15,
+        "char_end": 32,
     }
 
 
@@ -73,8 +75,10 @@ def test_docx_parse_reads_non_empty_paragraphs(tmp_path):
 
     assert result.success is True
     evidence = result.data["evidence"]
-    assert [item["content"] for item in evidence] == ["First paragraph", "Second paragraph"]
-    assert evidence[1]["locator"]["paragraph"] == 2
+    assert len(evidence) == 1
+    assert "First paragraph" in evidence[0]["content"]
+    assert "Second paragraph" in evidence[0]["content"]
+    assert evidence[0]["locator"]["paragraph"] == 1
 
 
 def test_pdf_parse_preserves_page_numbers(tmp_path):
@@ -100,6 +104,80 @@ def test_pdf_parse_preserves_page_numbers(tmp_path):
     assert [item["locator"]["page"] for item in evidence] == [1, 2]
     assert evidence[0]["content"] == "First page text"
     assert evidence[1]["content"] == "Second page text"
+
+
+def test_merge_to_chunks_combines_short_paragraphs_and_splits_at_target():
+    text = "Alpha paragraph\n\nBeta paragraph\n\nGamma paragraph"
+    spans = _paragraph_spans(text)
+
+    merged = _merge_to_chunks(spans, target=100, max_chars=160)
+    split = _merge_to_chunks(spans, target=31, max_chars=160)
+
+    assert merged == [(text, 0, len(text))]
+    assert [chunk[0] for chunk in split] == [
+        "Alpha paragraph\n\nBeta paragraph",
+        "Gamma paragraph",
+    ]
+    assert split[0][1:] == (0, 31)
+    assert split[1][1:] == (33, 48)
+
+
+def test_merge_with_source_content_equals_source_slice_and_respects_max_chars():
+    # 原文段落间含多余空行/空白：content 必须等于 source[start:end]（locator 可还原 content）。
+    text = "Alpha\n \n\nBeta\n\n\nGamma"
+    spans = _paragraph_spans(text)
+
+    chunks = _merge_to_chunks(spans, target=100, max_chars=200, source=text)
+
+    assert len(chunks) == 1
+    content, start, end = chunks[0]
+    assert content == text[start:end]
+    assert "Alpha" in content and "Beta" in content and "Gamma" in content
+
+    # 大量短段落：合并块长度（span 跨度）绝不超过 max_chars，且仍合并（不是每段一条）。
+    many = "\n\n".join(f"seg{index}" for index in range(60))
+    many_chunks = _merge_to_chunks(_paragraph_spans(many), target=40, max_chars=80, source=many)
+    assert len(many_chunks) < 60
+    for content, start, end in many_chunks:
+        assert content == many[start:end]
+        assert end - start <= 80
+
+
+def test_hard_split_prefers_boundaries_and_keeps_offsets_contiguous():
+    text = "Alpha sentence. Beta sentence! Gamma sentence? Delta sentence."
+
+    chunks = _hard_split(text, base_start=10, max_chars=30)
+
+    assert len(chunks) > 1
+    assert all(0 < len(content) <= 30 for content, _, _ in chunks)
+    assert chunks[0][0].endswith("!")
+    assert chunks[0][1:] == (10, 40)
+    for content, start, end in chunks:
+        assert content == text[start - 10 : end - 10]
+    for previous, current in zip(chunks, chunks[1:]):
+        assert previous[2] <= current[1]
+        assert text[previous[2] - 10 : current[1] - 10].strip() == ""
+
+
+def test_configured_chunk_sizes_affect_text_parse(monkeypatch, tmp_path):
+    task_id = "config-text-task"
+    original_dir = settings.data_root_path / "tasks" / task_id / "original"
+    original_dir.mkdir(parents=True)
+    path = original_dir / "note.txt"
+    path.write_text("Alpha paragraph\n\nBeta paragraph\n\nGamma paragraph", encoding="utf-8")
+    file = _task_file(path, "txt", "text")
+    skill = DocumentParseSkill()
+
+    monkeypatch.setattr(settings, "parse_chunk_target_chars", 100)
+    monkeypatch.setattr(settings, "parse_chunk_max_chars", 160)
+    merged = skill.run(_context(task_id), {"file": serialize_file(file)})
+
+    monkeypatch.setattr(settings, "parse_chunk_target_chars", 31)
+    monkeypatch.setattr(settings, "parse_chunk_max_chars", 160)
+    split = skill.run(_context(task_id), {"file": serialize_file(file)})
+
+    assert len(merged.data["evidence"]) == 1
+    assert len(split.data["evidence"]) == 2
 
 
 def test_scanned_pdf_without_text_returns_warning(tmp_path):

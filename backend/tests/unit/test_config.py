@@ -100,6 +100,8 @@ def test_extract_cost_controls_are_clamped_to_supported_ranges():
         EXTRACT_RELEVANCE_PER_DOC_MIN=-1,
         EXTRACT_RATE_LIMIT_COOLDOWN_SEC=-1.0,
         EXTRACT_RATE_LIMIT_CIRCUIT_BREAKER=-1,
+        PARSE_CHUNK_TARGET_CHARS=1,
+        PARSE_CHUNK_MAX_CHARS=1,
     )
     too_high = Settings(
         SECRET_KEY="x" * 32,
@@ -112,6 +114,8 @@ def test_extract_cost_controls_are_clamped_to_supported_ranges():
         EXTRACT_RELEVANCE_PER_DOC_MIN=9999,
         EXTRACT_RATE_LIMIT_COOLDOWN_SEC=999.0,
         EXTRACT_RATE_LIMIT_CIRCUIT_BREAKER=9999,
+        PARSE_CHUNK_TARGET_CHARS=99999,
+        PARSE_CHUNK_MAX_CHARS=99999,
     )
 
     assert too_low.extract_batch_max_items == 1
@@ -122,6 +126,8 @@ def test_extract_cost_controls_are_clamped_to_supported_ranges():
     assert too_low.extract_relevance_per_doc_min == 0
     assert too_low.extract_rate_limit_cooldown_sec == 0.0
     assert too_low.extract_rate_limit_circuit_breaker == 0
+    assert too_low.parse_chunk_target_chars == 100
+    assert too_low.parse_chunk_max_chars == 200
     assert too_high.extract_batch_max_items == 500
     assert too_high.extract_batch_max_chars == 120000
     assert too_high.extract_min_evidence_chars == 2000
@@ -130,6 +136,8 @@ def test_extract_cost_controls_are_clamped_to_supported_ranges():
     assert too_high.extract_relevance_per_doc_min == 1000
     assert too_high.extract_rate_limit_cooldown_sec == 120.0
     assert too_high.extract_rate_limit_circuit_breaker == 1000
+    assert too_high.parse_chunk_target_chars == 8000
+    assert too_high.parse_chunk_max_chars == 16000
 
 
 def test_llm_retry_backoff_settings_are_clamped_to_supported_ranges():

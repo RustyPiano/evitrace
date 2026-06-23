@@ -880,7 +880,7 @@ def test_full_flow_enforces_two_analyst_boundary_and_admin_access(client):
 
     evidence_response = client.get(f"/api/v1/tasks/{task_id}/evidence", headers=analyst_a_headers)
     assert evidence_response.status_code == 200
-    assert evidence_response.json()["data"]["total"] >= 2
+    assert evidence_response.json()["data"]["total"] >= 1
 
     results_response = client.get(f"/api/v1/tasks/{task_id}/results", headers=analyst_a_headers)
     assert results_response.status_code == 200

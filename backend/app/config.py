@@ -72,6 +72,8 @@ class Settings(BaseSettings):
     extract_rate_limit_circuit_breaker: int = Field(
         default=8, validation_alias="EXTRACT_RATE_LIMIT_CIRCUIT_BREAKER"
     )
+    parse_chunk_target_chars: int = Field(default=800, validation_alias="PARSE_CHUNK_TARGET_CHARS")
+    parse_chunk_max_chars: int = Field(default=1600, validation_alias="PARSE_CHUNK_MAX_CHARS")
     mock_ai: bool = Field(default=True, validation_alias="MOCK_AI")
     mock_llm: bool | None = Field(default=None, validation_alias="MOCK_LLM")
     mock_media: bool | None = Field(default=None, validation_alias="MOCK_MEDIA")
@@ -176,6 +178,16 @@ class Settings(BaseSettings):
     @classmethod
     def clamp_extract_rate_limit_circuit_breaker(cls, value: int) -> int:
         return min(max(value, 0), 1000)
+
+    @field_validator("parse_chunk_target_chars")
+    @classmethod
+    def clamp_parse_chunk_target_chars(cls, value: int) -> int:
+        return min(max(value, 100), 8000)
+
+    @field_validator("parse_chunk_max_chars")
+    @classmethod
+    def clamp_parse_chunk_max_chars(cls, value: int) -> int:
+        return min(max(value, 200), 16000)
 
     @field_validator(
         "ocr_base_url",
