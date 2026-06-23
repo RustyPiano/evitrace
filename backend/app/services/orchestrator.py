@@ -27,7 +27,7 @@ from app.schemas import AppError
 from app.services import parse_service, result_service, run_guard
 from app.services.storage_service import PARSER_SKILL_BY_MODALITY
 from app.services.task_service import ensure_task_access, serialize_file, task_not_found
-from app.skills.base import SkillContext
+from app.skills.base import RunCancelled, SkillContext
 from app.skills.conflict_detect import ConflictDetectSkill
 from app.skills.intelligence_extract import IntelligenceExtractSkill
 from app.skills.registry import SKILL_MANIFESTS, is_enabled
@@ -36,6 +36,7 @@ from app.skills.report_generate import ReportGenerateSkill
 logger = logging.getLogger(__name__)
 INTERRUPTED_MESSAGE = "服务重启导致运行中断，请重新执行"
 REQUIRED_ANALYSIS_SKILLS = ["intelligence_extract", "conflict_detect", "report_generate"]
+CANCELLED_MESSAGE = "分析已手动取消"
 
 
 def _json_dump(value: Any) -> str:
@@ -78,6 +79,12 @@ def _force_fail_unfinished_run(task_id: str, run_id: str, message: str) -> None:
             changed = True
         if changed:
             db.commit()
+
+
+def _run_cancel_requested(run_id: str) -> bool:
+    with SessionLocal() as db:
+        run = db.get(TaskRun, run_id)
+        return bool(run and run.cancel_requested)
 
 
 def _build_plan(run_id: str, files: list[TaskFile]) -> dict[str, Any]:
@@ -196,6 +203,7 @@ def start_run(db: Session, task_id: str, current_user) -> TaskRun:
             progress=0,
             current_step="queued",
             warnings_json="[]",
+            cancel_requested=False,
             started_at=_now(),
         )
         db.add(run)
@@ -224,6 +232,7 @@ def _create_run_without_user(db: Session, task_id: str) -> TaskRun:
         progress=0,
         current_step="queued",
         warnings_json="[]",
+        cancel_requested=False,
         started_at=_now(),
     )
     db.add(run)
@@ -247,12 +256,15 @@ def run_task(task_id: str, run_id: str | None = None) -> None:
 def execute_run(task_id: str, run_id: str) -> None:
     warnings: list[str] = []
     final_error_message = "分析任务异常中断"
+    cancel_check = lambda: _run_cancel_requested(run_id)
     try:
         with SessionLocal() as db:
             task = db.get(Task, task_id)
             run = db.get(TaskRun, run_id)
             if task is None or run is None:
                 return
+            if cancel_check():
+                raise RunCancelled()
             _update_state(
                 db,
                 task,
@@ -262,6 +274,8 @@ def execute_run(task_id: str, run_id: str) -> None:
                 progress=0,
                 current_step="queued",
             )
+            if cancel_check():
+                raise RunCancelled()
 
             _update_state(db, task, run, task_status=TASK_STATUS_PARSING, progress=10, current_step="parsing")
             parse_summary = parse_service.parse_all_files(
@@ -269,10 +283,13 @@ def execute_run(task_id: str, run_id: str) -> None:
                 run_id=run.id,
                 progress_start=10,
                 progress_end=45,
+                cancel_check=cancel_check,
             )
             warnings.extend(parse_summary.warnings)
             warnings.extend(parse_summary.errors)
             _update_state(db, task, run, task_status=TASK_STATUS_PARSING, progress=45, current_step="parsing")
+            if cancel_check():
+                raise RunCancelled()
 
             evidence_items = _list_evidence(db, run.id)
             if not evidence_items:
@@ -284,9 +301,22 @@ def execute_run(task_id: str, run_id: str) -> None:
 
             _update_state(db, task, run, task_status=TASK_STATUS_EXTRACTING, progress=55, current_step="extracting")
             context = SkillContext(task_id=task.id, run_id=run.id, data_root=str(settings.data_root_path))
+            def extract_progress(done: int, total: int) -> None:
+                progress = min(70, 55 + int(15 * done / max(total, 1)))
+                _update_state(
+                    db,
+                    task,
+                    run,
+                    task_status=TASK_STATUS_EXTRACTING,
+                    progress=progress,
+                    current_step=f"extracting {done}/{total}",
+                )
+
             extract_result = IntelligenceExtractSkill().run(
                 context,
                 {"task": _task_payload(task), "evidence": evidence_items},
+                progress_callback=extract_progress,
+                cancel_check=cancel_check,
             )
             if not extract_result.success:
                 raise AppError(
@@ -299,6 +329,8 @@ def execute_run(task_id: str, run_id: str) -> None:
             events = extract_result.data["events"]
             timeline = extract_result.data["timeline"]
             _update_state(db, task, run, task_status=TASK_STATUS_EXTRACTING, progress=70, current_step="extracting")
+            if cancel_check():
+                raise RunCancelled()
 
             _update_state(
                 db,
@@ -311,6 +343,8 @@ def execute_run(task_id: str, run_id: str) -> None:
             conflict_result = ConflictDetectSkill().run(context, {"events": events})
             warnings.extend(conflict_result.warnings)
             conflicts = conflict_result.data["conflicts"]
+            if cancel_check():
+                raise RunCancelled()
 
             _update_state(
                 db,
@@ -357,6 +391,22 @@ def execute_run(task_id: str, run_id: str) -> None:
                 progress=100,
                 current_step="awaiting_review",
             )
+    except RunCancelled:
+        final_error_message = CANCELLED_MESSAGE
+        logger.info("Task background run cancelled task_id=%s run_id=%s", task_id, run_id)
+        with SessionLocal() as db:
+            run = db.get(TaskRun, run_id)
+            task = db.get(Task, task_id)
+            if run is not None:
+                run.status = RUN_STATUS_FAILED
+                run.error_message = final_error_message
+                run.finished_at = _now()
+                run.current_step = "cancelled"
+                _set_warnings(run, warnings)
+            if task is not None:
+                task.status = TASK_STATUS_FAILED
+                task.last_error = final_error_message
+            db.commit()
     except Exception as exc:
         final_error_message = _safe_error(exc)
         logger.exception("Task background run crashed task_id=%s run_id=%s error=%s", task_id, run_id, type(exc).__name__)

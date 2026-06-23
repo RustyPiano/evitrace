@@ -122,6 +122,21 @@ def _rebuild_analysis_results_without_legacy_unique(connection) -> None:
 
 def _migrate_sqlite_schema(connection) -> None:
     try:
+        task_run_columns = _sqlite_table_columns(connection, "task_runs")
+    except Exception as exc:  # pragma: no cover - defensive startup migration
+        logger.warning("SQLite migration skipped task_runs inspection: %s", type(exc).__name__)
+        task_run_columns = set()
+
+    if task_run_columns and "cancel_requested" not in task_run_columns:
+        try:
+            connection.exec_driver_sql(
+                "ALTER TABLE task_runs ADD COLUMN cancel_requested BOOLEAN NOT NULL DEFAULT 0"
+            )
+            logger.info("SQLite migration added task_runs.cancel_requested")
+        except Exception as exc:  # pragma: no cover - defensive startup migration
+            logger.warning("SQLite migration could not add task_runs.cancel_requested: %s", type(exc).__name__)
+
+    try:
         evidence_columns = _sqlite_table_columns(connection, "evidence")
     except Exception as exc:  # pragma: no cover - defensive startup migration
         logger.warning("SQLite migration skipped evidence inspection: %s", type(exc).__name__)

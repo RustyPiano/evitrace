@@ -3,15 +3,18 @@ from urllib.parse import unquote
 
 from app.constants import (
     RUN_STATUS_FAILED,
+    RUN_STATUS_QUEUED,
     RUN_STATUS_RUNNING,
     RUN_STATUS_SUCCEEDED,
     TASK_STATUS_AWAITING_REVIEW,
+    TASK_STATUS_EXTRACTING,
     TASK_STATUS_FAILED,
     TASK_STATUS_PARSING,
 )
 from app.database import SessionLocal
-from app.models import AnalysisResult, Evidence, SkillConfig, Task, TaskFile, TaskRun
+from app.models import AnalysisResult, AuditLog, Evidence, SkillConfig, Task, TaskFile, TaskRun
 from app.services import orchestrator
+from app.skills.base import RunCancelled
 
 from tests.conftest import login_headers
 
@@ -196,6 +199,40 @@ def test_start_run_rejects_when_any_task_is_running(client, create_user):
     assert response.json()["detail"]["code"] == "TASK_ALREADY_RUNNING"
 
 
+def test_cancel_run_marks_latest_running_run_and_records_audit(client, create_user):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        task.status = TASK_STATUS_EXTRACTING
+        run = TaskRun(task_id=task_id, status=RUN_STATUS_RUNNING, progress=55, current_step="extracting")
+        db.add(run)
+        db.commit()
+        run_id = run.id
+
+    response = client.post(f"/api/v1/tasks/{task_id}/runs/cancel", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"run_id": run_id, "cancel_requested": True}
+    with SessionLocal() as db:
+        run = db.get(TaskRun, run_id)
+        audit = db.query(AuditLog).filter(AuditLog.action == "analysis_cancel_requested").one()
+        assert run.cancel_requested is True
+        assert audit.resource_id == task_id
+
+
+def test_cancel_run_returns_conflict_when_no_run_is_active(client, create_user):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+
+    response = client.post(f"/api/v1/tasks/{task_id}/runs/cancel", headers=headers)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "NO_RUNNING_RUN"
+
+
 def test_analysis_results_and_download_enforce_owner_access(client, create_user):
     create_user("owner")
     create_user("other")
@@ -254,7 +291,13 @@ def test_execute_run_passes_run_id_and_parse_progress_window(client, create_user
 
     call_args: dict[str, object] = {}
 
-    def fake_parse(_task_id: str, run_id: str | None = None, progress_start: int = 0, progress_end: int = 100):
+    def fake_parse(
+        _task_id: str,
+        run_id: str | None = None,
+        progress_start: int = 0,
+        progress_end: int = 100,
+        **_kwargs,
+    ):
         call_args.update(
             {
                 "task_id": _task_id,
@@ -279,6 +322,82 @@ def test_execute_run_passes_run_id_and_parse_progress_window(client, create_user
         "progress_start": 10,
         "progress_end": 45,
     }
+
+
+def test_execute_run_cancelled_during_extraction_finishes_cancelled_without_later_skills(
+    client,
+    create_user,
+    monkeypatch,
+):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    _upload_text(client, headers, task_id)
+    with SessionLocal() as db:
+        owner = db.query(Task).filter(Task.id == task_id).one().owner
+        run = orchestrator.start_run(db, task_id, owner)
+        run_id = run.id
+
+    def fake_parse(_task_id: str, run_id: str | None = None, **_kwargs):
+        return orchestrator.parse_service.ParseSummary(task_id=_task_id, run_id=run_id)
+
+    class CancelExtract:
+        def run(self, _context, _payload, **_kwargs):
+            raise RunCancelled()
+
+    class UnexpectedSkill:
+        def run(self, *_args, **_kwargs):
+            raise AssertionError("later analysis skills must not run after cancellation")
+
+    monkeypatch.setattr(orchestrator.parse_service, "parse_all_files", fake_parse)
+    monkeypatch.setattr(
+        orchestrator,
+        "_list_evidence",
+        lambda _db, _run_id: [
+            {
+                "display_id": "E-0001",
+                "content": "6月1日14:00，车队在地点A发现3辆车。",
+                "content_summary": "6月1日14:00，车队在地点A发现3辆车。",
+                "file": {"original_name": "note.txt"},
+                "locator": {"kind": "text"},
+                "modality": "text",
+                "evidence_type": "paragraph",
+            }
+        ],
+    )
+    monkeypatch.setattr(orchestrator, "IntelligenceExtractSkill", CancelExtract)
+    monkeypatch.setattr(orchestrator, "ConflictDetectSkill", UnexpectedSkill)
+    monkeypatch.setattr(orchestrator, "ReportGenerateSkill", UnexpectedSkill)
+
+    orchestrator.execute_run(task_id, run_id)
+
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        run = db.get(TaskRun, run_id)
+        assert task.status == TASK_STATUS_FAILED
+        assert task.last_error == "分析已手动取消"
+        assert run.status == RUN_STATUS_FAILED
+        assert run.current_step == "cancelled"
+        assert run.error_message == "分析已手动取消"
+
+
+def test_start_run_resets_historical_cancel_requested_flag(client, create_user):
+    create_user("owner")
+    headers = login_headers(client, "owner", "password")
+    task_id = _create_task(client, headers)
+    _upload_text(client, headers, task_id)
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        task.status = "ready"
+        old_run = TaskRun(task_id=task_id, status=RUN_STATUS_QUEUED, cancel_requested=True)
+        db.add(old_run)
+        db.commit()
+        owner = task.owner
+        run = orchestrator.start_run(db, task_id, owner)
+        run_id = run.id
+
+    with SessionLocal() as db:
+        assert db.get(TaskRun, run_id).cancel_requested is False
 
 
 def test_recover_interrupted_runs_marks_running_records_failed():

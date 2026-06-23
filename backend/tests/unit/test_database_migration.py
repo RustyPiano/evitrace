@@ -71,6 +71,14 @@ def test_initialize_database_migrates_legacy_sqlite_schema(tmp_path, monkeypatch
         connection.execute(
             text(
                 """
+                INSERT INTO task_runs (id, task_id, status, plan_json, progress, warnings_json)
+                VALUES ('run-1', 'task-1', 'succeeded', '{}', 100, '[]')
+                """
+            )
+        )
+        connection.execute(
+            text(
+                """
                 CREATE TABLE evidence (
                     id TEXT PRIMARY KEY,
                     display_id TEXT NOT NULL,
@@ -134,10 +142,13 @@ def test_initialize_database_migrates_legacy_sqlite_schema(tmp_path, monkeypatch
 
     with legacy_engine.begin() as connection:
         evidence_columns = {row[1] for row in connection.execute(text("PRAGMA table_info(evidence)"))}
+        task_run_columns = {row[1] for row in connection.execute(text("PRAGMA table_info(task_runs)"))}
         indexes = connection.execute(text("PRAGMA index_list(analysis_results)")).fetchall()
         assert "run_id" in evidence_columns
+        assert "cancel_requested" in task_run_columns
         assert not any(row[2] and connection.execute(text(f"PRAGMA index_info({row[1]})")).fetchall()[0][2] == "task_id" for row in indexes)
         assert connection.execute(text("SELECT run_id FROM evidence WHERE id='evidence-1'")).scalar() == "run-1"
+        assert connection.execute(text("SELECT cancel_requested FROM task_runs WHERE id='run-1'")).scalar() == 0
         assert connection.execute(text("SELECT id FROM analysis_results WHERE id='result-1'")).scalar() == "result-1"
         connection.execute(
             text(

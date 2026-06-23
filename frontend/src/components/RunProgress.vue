@@ -10,6 +10,7 @@
       :status="progressStatus"
       :stroke-width="10"
     />
+    <p v-if="currentStepLabel" class="run-current-step">{{ currentStepLabel }}</p>
 
     <div class="run-step-list">
       <div
@@ -56,7 +57,7 @@
 import { computed } from "vue";
 
 import type { RunStatus } from "@/types/workbench";
-import { runStatusLabel } from "@/utils/status";
+import { runStatusLabel, runStepLabel } from "@/utils/status";
 
 const props = defineProps<{
   run: RunStatus | null;
@@ -75,7 +76,21 @@ const currentStepKey = computed(() => {
   if (current === "queued") {
     return "parsing";
   }
+  if (current?.startsWith("extracting ")) {
+    return "extracting";
+  }
   return current ?? "";
+});
+
+const currentStepLabel = computed(() => {
+  const current = props.run?.current_step;
+  if (!current) {
+    return "";
+  }
+  if (current.startsWith("extracting ")) {
+    return `提取 ${current.slice("extracting ".length)}`;
+  }
+  return runStepLabel(current);
 });
 
 const currentStepIndex = computed(() => stepOrder.indexOf(currentStepKey.value));

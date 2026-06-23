@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     vlm_model: str | None = Field(default=None, validation_alias="VLM_MODEL")
     llm_timeout_sec: int = Field(default=180, validation_alias="LLM_TIMEOUT_SEC")
     llm_max_retries: int = Field(default=2, validation_alias="LLM_MAX_RETRIES")
+    extract_concurrency: int = Field(default=4, validation_alias="EXTRACT_CONCURRENCY")
     mock_ai: bool = Field(default=True, validation_alias="MOCK_AI")
     mock_llm: bool | None = Field(default=None, validation_alias="MOCK_LLM")
     mock_media: bool | None = Field(default=None, validation_alias="MOCK_MEDIA")
@@ -92,6 +93,11 @@ class Settings(BaseSettings):
         if not value.strip():
             raise ValueError("must not be empty")
         return value
+
+    @field_validator("extract_concurrency")
+    @classmethod
+    def clamp_extract_concurrency(cls, value: int) -> int:
+        return min(max(value, 1), 16)
 
     @field_validator(
         "ocr_base_url",

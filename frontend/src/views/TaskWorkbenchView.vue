@@ -38,6 +38,15 @@
         >
           {{ analysisButtonText }}
         </el-button>
+        <el-button
+          v-if="isLatestRunRunning"
+          type="danger"
+          plain
+          :loading="analysisCancelling"
+          @click="cancelAnalysis"
+        >
+          {{ analysisCancelling ? "正在停止..." : "停止分析" }}
+        </el-button>
         <el-checkbox
           v-if="showForceComplete"
           v-model="forceComplete"
@@ -184,6 +193,7 @@ const evidenceItems = ref<EvidenceIndexItem[]>([]);
 const evidenceTotal = ref(0);
 const selectedEvidenceId = ref<string | null>(null);
 const analysisStarting = ref(false);
+const analysisCancelling = ref(false);
 const completing = ref(false);
 const forceComplete = ref(false);
 const downloading = ref(false);
@@ -307,6 +317,9 @@ async function refreshAll(showLoading = false, rethrow = false) {
   try {
     await Promise.all([loadTask(), loadLatestRun(), loadRuns()]);
     await Promise.all([loadEvidence(), loadResults()]);
+    if (!isLatestRunRunning.value) {
+      analysisCancelling.value = false;
+    }
   } catch (error) {
     errorMessage.value = extractErrorMessage(error, "加载任务工作台失败");
     if (rethrow) {
@@ -388,6 +401,7 @@ async function startAnalysis() {
       error_message: null
     };
     task.value.status = "queued";
+    analysisCancelling.value = false;
     analysisResult.value = null;
     selectedEvidenceId.value = null;
     await loadRuns(newRunId);
@@ -396,6 +410,21 @@ async function startAnalysis() {
     ElMessage.error(extractErrorMessage(error, "启动分析失败"));
   } finally {
     analysisStarting.value = false;
+  }
+}
+
+async function cancelAnalysis() {
+  if (!task.value || !latestRun.value) {
+    return;
+  }
+  analysisCancelling.value = true;
+  try {
+    await apiClient.post(`/tasks/${task.value.id}/runs/cancel`);
+    ElMessage.info("正在停止分析...");
+    startPolling();
+  } catch (error) {
+    analysisCancelling.value = false;
+    ElMessage.error(extractErrorMessage(error, "停止分析失败"));
   }
 }
 

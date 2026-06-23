@@ -72,6 +72,22 @@ def test_local_model_and_ffmpeg_timeout_settings_are_configurable():
     assert settings.vlm_model == "qwen-vl"
 
 
+def test_extract_concurrency_is_clamped_to_supported_range():
+    too_low = Settings(
+        SECRET_KEY="x" * 32,
+        FIRST_ADMIN_PASSWORD="not-default-admin-password",
+        EXTRACT_CONCURRENCY=0,
+    )
+    too_high = Settings(
+        SECRET_KEY="x" * 32,
+        FIRST_ADMIN_PASSWORD="not-default-admin-password",
+        EXTRACT_CONCURRENCY=99,
+    )
+
+    assert too_low.extract_concurrency == 1
+    assert too_high.extract_concurrency == 16
+
+
 def test_empty_media_service_urls_become_none():
     settings = Settings(
         SECRET_KEY="x" * 32,

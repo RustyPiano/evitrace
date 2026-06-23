@@ -88,6 +88,7 @@ class TaskRun(Base):
     progress: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     current_step: Mapped[str | None] = mapped_column(Text, nullable=True)
     warnings_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    cancel_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

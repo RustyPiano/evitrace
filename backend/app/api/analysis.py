@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.constants import RUN_STATUS_QUEUED, RUN_STATUS_RUNNING
 from app.dependencies import get_current_user, get_db
 from app.models import AnalysisResult, Evidence, Task, TaskRun, User
 from app.schemas import AppError
@@ -127,6 +128,35 @@ def start_analysis_run(
     db.commit()
     background_tasks.add_task(orchestrator.execute_run, task_id, run.id)
     return {"data": {"run_id": run.id, "status": "queued"}, "message": "ok"}
+
+
+@router.post("/tasks/{task_id}/runs/cancel")
+def cancel_analysis_run(
+    task_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    task = ensure_task_access(db, task_id, current_user)
+    run = (
+        db.query(TaskRun)
+        .filter(TaskRun.task_id == task.id, TaskRun.status.in_([RUN_STATUS_QUEUED, RUN_STATUS_RUNNING]))
+        .order_by(TaskRun.started_at.desc().nullslast(), TaskRun.id.desc())
+        .first()
+    )
+    if run is None:
+        raise AppError("NO_RUNNING_RUN", "当前没有正在运行的分析", status.HTTP_409_CONFLICT)
+
+    run.cancel_requested = True
+    record_audit(
+        db,
+        user_id=current_user.id,
+        action="analysis_cancel_requested",
+        resource_type="task",
+        resource_id=task.id,
+        detail={"run_id": run.id},
+    )
+    db.commit()
+    return {"data": {"run_id": run.id, "cancel_requested": True}, "message": "正在停止分析"}
 
 
 @router.get("/tasks/{task_id}/runs/latest")

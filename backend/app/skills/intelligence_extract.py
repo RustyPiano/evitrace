@@ -1,8 +1,9 @@
 import json
 import unicodedata
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Callable
 from datetime import date, datetime, time, timezone
 
 from app.config import settings
@@ -10,7 +11,7 @@ from app.schemas_analysis import Entity, Event, ExtractionResult, FieldCitation,
 from app.services.llm_client import LocalLLMClient
 from app.utils.time_normalize import ParsedTime, parse_time_value
 
-from .base import SkillContext, SkillManifest, SkillResult
+from .base import RunCancelled, SkillContext, SkillManifest, SkillResult
 
 BATCH_MAX_ITEMS = 30
 BATCH_MAX_CHARS = 12_000
@@ -352,7 +353,13 @@ class IntelligenceExtractSkill:
     def __init__(self, llm_client: LocalLLMClient | None = None) -> None:
         self.llm_client = llm_client
 
-    def run(self, context: SkillContext, payload: Any) -> SkillResult:
+    def run(
+        self,
+        context: SkillContext,
+        payload: Any,
+        progress_callback: Callable[[int, int], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> SkillResult:
         started = perf_counter()
         evidence_items = list(payload.get("evidence") or [])
         if not evidence_items:
@@ -365,8 +372,15 @@ class IntelligenceExtractSkill:
                 extraction, sanitize_warnings = _sanitize_extraction(raw, evidence_items)
                 warnings.extend(sanitize_warnings)
             else:
-                extraction, real_warnings = self._run_real_extraction(payload, evidence_items)
+                extraction, real_warnings = self._run_real_extraction(
+                    payload,
+                    evidence_items,
+                    progress_callback=progress_callback,
+                    cancel_check=cancel_check,
+                )
                 warnings.extend(real_warnings)
+        except RunCancelled:
+            raise
         except Exception as exc:
             return SkillResult(
                 success=False,
@@ -392,7 +406,13 @@ class IntelligenceExtractSkill:
             },
         )
 
-    def _run_real_extraction(self, payload: Any, evidence_items: list[dict[str, Any]]) -> tuple[ExtractionResult, list[str]]:
+    def _run_real_extraction(
+        self,
+        payload: Any,
+        evidence_items: list[dict[str, Any]],
+        progress_callback: Callable[[int, int], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> tuple[ExtractionResult, list[str]]:
         client = self.llm_client or LocalLLMClient()
         task = payload.get("task") or {}
         system_prompt = (
@@ -469,9 +489,8 @@ class IntelligenceExtractSkill:
             "  ]\n"
             "}"
         )
-        extractions: list[ExtractionResult] = []
-        warnings: list[str] = []
-        for batch in _batch_evidence(evidence_items):
+
+        def extract_batch(batch: list[dict[str, Any]]) -> tuple[ExtractionResult, list[str]]:
             user_prompt = "\n".join(
                 [
                     f"任务目标：{task.get('objective') or ''}",
@@ -482,9 +501,46 @@ class IntelligenceExtractSkill:
             )
             result = client.generate_json(system_prompt, user_prompt, ExtractionResult)
             raw = result.model_dump(mode="json")
-            sanitized, sanitize_warnings = _sanitize_extraction(raw, batch)
-            warnings.extend(sanitize_warnings)
-            extractions.append(sanitized)
+            return _sanitize_extraction(raw, batch)
+
+        batches = _batch_evidence(evidence_items)
+        warnings: list[str] = []
+        total = len(batches)
+        done = 0
+        executor = ThreadPoolExecutor(max_workers=settings.extract_concurrency)
+        pending: set[Future[tuple[ExtractionResult, list[str]]]] = set()
+        fut_index: dict[Future[tuple[ExtractionResult, list[str]]], int] = {}
+        results: dict[int, ExtractionResult] = {}
+        next_idx = 0
+
+        def submit_until_window_full() -> None:
+            nonlocal next_idx
+            while len(pending) < settings.extract_concurrency and next_idx < total:
+                if cancel_check is not None and cancel_check():
+                    raise RunCancelled()
+                future = executor.submit(extract_batch, batches[next_idx])
+                fut_index[future] = next_idx
+                pending.add(future)
+                next_idx += 1
+
+        try:
+            submit_until_window_full()
+            while pending:
+                completed, pending = wait(pending, return_when=FIRST_COMPLETED)
+                for future in completed:
+                    index = fut_index.pop(future)
+                    sanitized, sanitize_warnings = future.result()
+                    results[index] = sanitized
+                    warnings.extend(sanitize_warnings)
+                    done += 1
+                    if progress_callback is not None:
+                        progress_callback(done, total)
+                if cancel_check is not None and cancel_check():
+                    raise RunCancelled()
+                submit_until_window_full()
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+        extractions = [results[index] for index in sorted(results)]
         merged = _merge_extractions(extractions)
         if not merged.entities and not merged.events:
             warnings.append("真实模型未抽取到任何要素，请检查模型/提示词")

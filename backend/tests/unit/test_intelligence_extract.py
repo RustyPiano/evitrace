@@ -1,5 +1,11 @@
 import json
+import re
+import threading
+import time
 
+import pytest
+
+from app.skills.base import RunCancelled
 from app.skills.base import SkillContext
 from app.skills.intelligence_extract import (
     IntelligenceExtractSkill,
@@ -30,6 +36,19 @@ def _evidence() -> list[dict]:
             "file": {"original_name": "b.txt"},
             "locator": {"kind": "text", "paragraph": 1},
         },
+    ]
+
+
+def _many_evidence(count: int) -> list[dict]:
+    return [
+        {
+            "display_id": f"E-{index + 1:04d}",
+            "content": f"6月1日14:00，分队在地点{index + 1}发现{index + 1}辆车。",
+            "content_summary": f"6月1日14:00，分队在地点{index + 1}发现{index + 1}辆车。",
+            "file": {"original_name": f"{index + 1}.txt"},
+            "locator": {"kind": "text", "paragraph": index + 1},
+        }
+        for index in range(count)
     ]
 
 
@@ -311,6 +330,178 @@ def test_real_extraction_prompt_includes_schema_example_and_empty_warning(monkey
     assert "只输出 JSON" in system_prompt
     assert "[E-0001]" in user_prompt
     assert "[E-0002]" in user_prompt
+
+
+def test_real_extraction_runs_batches_concurrently_and_reports_progress(monkeypatch, tmp_path):
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    class FakeClient:
+        def generate_json(self, _system, user, schema):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.03)
+            with lock:
+                active -= 1
+            display_id = re.search(r"\[(E-\d{4})\]", user).group(1)
+            return schema.model_validate(
+                {
+                    "entities": [
+                        {
+                            "type": "location",
+                            "name": f"地点{display_id}",
+                            "confidence": 0.8,
+                            "evidence_ids": [display_id],
+                        }
+                    ],
+                    "events": [
+                        {
+                            "event_key": f"分队-发现-{display_id}",
+                            "title": "发现车辆",
+                            "time_text": "6月1日14:00",
+                            "location": f"地点{display_id}",
+                            "evidence_ids": [display_id],
+                            "confidence": 0.8,
+                        }
+                    ],
+                }
+            )
+
+    progress: list[tuple[int, int]] = []
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_concurrency", 3, raising=False)
+
+    result = IntelligenceExtractSkill(llm_client=FakeClient()).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _many_evidence(95)},
+        progress_callback=lambda done, total: progress.append((done, total)),
+    )
+
+    assert result.success is True
+    assert len(result.data["events"]) == 4
+    assert max_active > 1
+    assert progress == [(1, 4), (2, 4), (3, 4), (4, 4)]
+
+
+def test_real_extraction_keeps_batch_order_when_batches_finish_out_of_order(monkeypatch, tmp_path):
+    class FakeClient:
+        def generate_json(self, _system, user, schema):
+            display_id = re.search(r"\[(E-\d{4})\]", user).group(1)
+            if display_id == "E-0001":
+                time.sleep(0.04)
+            return schema.model_validate(
+                {
+                    "events": [
+                        {
+                            "event_key": f"分队-发现-{display_id}",
+                            "title": f"发现{display_id}",
+                            "time_text": "6月1日14:00",
+                            "location": f"地点{display_id}",
+                            "evidence_ids": [display_id],
+                            "confidence": 0.8,
+                        }
+                    ]
+                }
+            )
+
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_concurrency", 2, raising=False)
+
+    result = IntelligenceExtractSkill(llm_client=FakeClient()).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _many_evidence(95)},
+    )
+
+    assert result.success is True
+    assert [event["event_id"] for event in result.data["events"]] == [
+        "EVT-001",
+        "EVT-002",
+        "EVT-003",
+        "EVT-004",
+    ]
+    assert [event["evidence_ids"][0] for event in result.data["events"]] == [
+        "E-0001",
+        "E-0031",
+        "E-0061",
+        "E-0091",
+    ]
+
+
+def test_real_extraction_cancels_pending_batches_and_propagates_run_cancelled(monkeypatch, tmp_path):
+    call_count = 0
+
+    class FakeClient:
+        def generate_json(self, _system, user, schema):
+            nonlocal call_count
+            call_count += 1
+            display_id = re.search(r"\[(E-\d{4})\]", user).group(1)
+            if display_id != "E-0001":
+                time.sleep(0.05)
+            return schema.model_validate(
+                {
+                    "events": [
+                        {
+                            "event_key": f"分队-发现-{display_id}",
+                            "title": "发现车辆",
+                            "evidence_ids": [display_id],
+                        }
+                    ]
+                }
+            )
+
+    progress: list[tuple[int, int]] = []
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_concurrency", 2, raising=False)
+
+    with pytest.raises(RunCancelled):
+        IntelligenceExtractSkill(llm_client=FakeClient()).run(
+            _context(tmp_path),
+            {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _many_evidence(95)},
+            progress_callback=lambda done, total: progress.append((done, total)),
+            cancel_check=lambda: len(progress) >= 1,
+        )
+
+    assert progress == [(1, 4)]
+    assert call_count <= progress[-1][0] + 2
+
+
+def test_real_extraction_fail_fast_does_not_run_unstarted_batches(monkeypatch, tmp_path):
+    call_count = 0
+
+    class FakeClient:
+        def generate_json(self, _system, user, schema):
+            nonlocal call_count
+            call_count += 1
+            display_id = re.search(r"\[(E-\d{4})\]", user).group(1)
+            if display_id == "E-0001":
+                raise RuntimeError("boom")
+            time.sleep(0.02)
+            return schema.model_validate(
+                {
+                    "events": [
+                        {
+                            "event_key": f"分队-发现-{display_id}",
+                            "title": "发现车辆",
+                            "evidence_ids": [display_id],
+                        }
+                    ]
+                }
+            )
+
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.mock_ai", False)
+    monkeypatch.setattr("app.skills.intelligence_extract.settings.extract_concurrency", 2, raising=False)
+
+    result = IntelligenceExtractSkill(llm_client=FakeClient()).run(
+        _context(tmp_path),
+        {"task": {"name": "Case", "objective": "Analyze"}, "evidence": _many_evidence(95)},
+    )
+
+    assert result.success is False
+    assert "RuntimeError: boom" in result.errors[0]
+    assert call_count <= 2
 
 
 def test_merge_extractions_combines_evidence_ids_for_same_fact():

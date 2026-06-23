@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import status
 from pydantic import BaseModel, Field
@@ -179,6 +179,7 @@ def parse_all_files(
     run_id: str | None = None,
     progress_start: int = 0,
     progress_end: int = 100,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> ParseSummary:
     summary = ParseSummary(task_id=task_id, run_id=run_id)
     with SessionLocal() as db:
@@ -213,6 +214,10 @@ def parse_all_files(
             progress_end,
         )
         for index, file in enumerate(files, start=1):
+            if cancel_check is not None and cancel_check():
+                from app.skills.base import RunCancelled
+
+                raise RunCancelled()
             skill_ids = _parser_skill_ids(file.modality)
             result_service.delete_file_evidence(db, file.id, run_id=run_id)
             _cleanup_file_derived_artifacts(task.id, file.id, run_id)

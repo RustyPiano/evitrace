@@ -3,6 +3,10 @@ from typing import Any, Protocol
 from pydantic import BaseModel, Field
 
 
+class RunCancelled(Exception):
+    pass
+
+
 class SkillManifest(BaseModel):
     id: str
     name: str
