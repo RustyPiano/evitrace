@@ -90,8 +90,6 @@ def split_paragraphs(markdown: str) -> list[str]:
 
 
 def looks_like_fact_assertion(paragraph: str) -> bool:
-    if EVIDENCE_ID_RE.search(paragraph):
-        return False
     if re.search(r"\d|[:：]|[年月日时分辆个名处]", paragraph):
         return True
     return bool(
@@ -104,7 +102,21 @@ def looks_like_fact_assertion(paragraph: str) -> bool:
 
 
 def count_free_text_ungrounded_conclusions(report_text: str) -> int:
-    return sum(1 for paragraph in split_paragraphs(report_text) if looks_like_fact_assertion(paragraph))
+    return sum(
+        1
+        for paragraph in split_paragraphs(report_text)
+        if looks_like_fact_assertion(paragraph) and not EVIDENCE_ID_RE.search(paragraph)
+    )
+
+
+def citation_presence(markdown: str) -> dict[str, Any]:
+    fact_paragraphs = [paragraph for paragraph in split_paragraphs(markdown) if looks_like_fact_assertion(paragraph)]
+    cited_fact_paragraphs = [paragraph for paragraph in fact_paragraphs if EVIDENCE_ID_RE.search(paragraph)]
+    return {
+        "fact_paragraphs": len(fact_paragraphs),
+        "cited_fact_paragraphs": len(cited_fact_paragraphs),
+        "ratio": len(cited_fact_paragraphs) / len(fact_paragraphs) if fact_paragraphs else None,
+    }
 
 
 def matched_conflict_indexes(
@@ -155,6 +167,7 @@ def run_b_case(client: Any, headers: dict[str, str], case_name: str, data_root: 
 
     citation_check = validate_report_citations(report_markdown, valid_ids)
     citation_ratio = valid_citation_ratio(report_markdown, valid_ids)
+    citation_presence_result = citation_presence(report_markdown)
     conflicts = list(results.get("conflicts") or [])
     matched_indexes = matched_conflict_indexes(conflicts, expected_conflicts)
 
@@ -168,6 +181,9 @@ def run_b_case(client: Any, headers: dict[str, str], case_name: str, data_root: 
         "conflict_found": row["found_conflict_count"],
         "conflict_total": row["expected_conflict_count"],
         "spurious_conflicts": len(conflicts) - len(matched_indexes),
+        "citation_presence": citation_presence_result["ratio"],
+        "citation_fact_paragraphs": citation_presence_result["fact_paragraphs"],
+        "citation_cited_fact_paragraphs": citation_presence_result["cited_fact_paragraphs"],
         "valid_citation_ratio": citation_ratio["ratio"],
         "citation_used": citation_ratio["used"],
         "citation_valid": citation_ratio["valid"],
@@ -179,7 +195,7 @@ def run_b_case(client: Any, headers: dict[str, str], case_name: str, data_root: 
     }
 
 
-def build_direct_prompt(case_name: str, evidence: list[dict[str, Any]]) -> str:
+def build_naive_prompt(case_name: str, evidence: list[dict[str, Any]]) -> str:
     evidence_text = "\n\n".join(
         f"资料 {index}（{item.get('modality')}/{item.get('evidence_type')}）：\n{item.get('content') or ''}"
         for index, item in enumerate(evidence, start=1)
@@ -192,23 +208,49 @@ def build_direct_prompt(case_name: str, evidence: list[dict[str, Any]]) -> str:
     )
 
 
-def run_a_case(case_name: str, expected_conflicts: list[dict[str, Any]], evidence: list[dict[str, Any]]) -> dict[str, Any]:
+def build_direct_prompt(case_name: str, evidence: list[dict[str, Any]]) -> str:
+    evidence_text = "\n".join(
+        f"[{item['display_id']}] {item.get('content') or ''}"
+        for item in evidence
+    )
+    return (
+        "请根据以下证据写一份情报分析报告。仍然只进行一次自由生成，不要使用任何外部资料。\n\n"
+        "硬性要求：\n"
+        "1. 每条事实性结论必须在句末标注支持它的证据编号，如 [E-0001]。\n"
+        "2. 若发现同一事件存在时间、地点或数量矛盾，必须显式指出冲突，并分别标注各自来源。\n"
+        "3. 只能使用下方给定证据，不得编造编号或引用未给出的编号。\n\n"
+        f"案例：{case_name}\n\n"
+        "证据：\n"
+        f"{evidence_text}"
+    )
+
+
+def run_llm_baseline_case(
+    case_name: str,
+    expected_conflicts: list[dict[str, Any]],
+    evidence: list[dict[str, Any]],
+    prompt_builder: Any,
+) -> dict[str, Any]:
     from app.services.llm_client import LocalLLMClient
 
     client = LocalLLMClient()
     report_text = client.generate_text(
         "你是情报分析助手。根据用户给出的资料直接生成一份完整 Markdown 报告。",
-        build_direct_prompt(case_name, evidence),
+        prompt_builder(case_name, evidence),
     )
     recall = heuristic_conflict_recall(report_text, expected_conflicts)
     evidence_ids = {item["display_id"] for item in evidence}
     citation_ratio = valid_citation_ratio(report_text, evidence_ids)
+    citation_presence_result = citation_presence(report_text)
     return {
         "case": case_name,
         "report_markdown": report_text,
         "conflict_recall": recall["recall"],
         "conflict_found": recall["found"],
         "conflict_total": recall["total"],
+        "citation_presence": citation_presence_result["ratio"],
+        "citation_fact_paragraphs": citation_presence_result["fact_paragraphs"],
+        "citation_cited_fact_paragraphs": citation_presence_result["cited_fact_paragraphs"],
         "valid_citation_ratio": citation_ratio["ratio"],
         "citation_used": citation_ratio["used"],
         "citation_valid": citation_ratio["valid"],
@@ -216,16 +258,29 @@ def run_a_case(case_name: str, expected_conflicts: list[dict[str, Any]], evidenc
     }
 
 
+def run_a0_case(case_name: str, expected_conflicts: list[dict[str, Any]], evidence: list[dict[str, Any]]) -> dict[str, Any]:
+    return run_llm_baseline_case(case_name, expected_conflicts, evidence, build_naive_prompt)
+
+
+def run_a_case(case_name: str, expected_conflicts: list[dict[str, Any]], evidence: list[dict[str, Any]]) -> dict[str, Any]:
+    return run_llm_baseline_case(case_name, expected_conflicts, evidence, build_direct_prompt)
+
+
 def summarize_b(rows: list[dict[str, Any]]) -> dict[str, Any]:
     expected_total = sum(row["conflict_total"] for row in rows)
     found_total = sum(row["conflict_found"] for row in rows)
     citation_used = sum(row["citation_used"] for row in rows)
     citation_valid = sum(row["citation_valid"] for row in rows)
+    fact_paragraphs = sum(row["citation_fact_paragraphs"] for row in rows)
+    cited_fact_paragraphs = sum(row["citation_cited_fact_paragraphs"] for row in rows)
     return {
         "conflict_recall": found_total / expected_total if expected_total else 1.0,
         "conflict_found": found_total,
         "conflict_total": expected_total,
         "spurious_conflicts": sum(row["spurious_conflicts"] for row in rows),
+        "citation_presence": cited_fact_paragraphs / fact_paragraphs if fact_paragraphs else None,
+        "citation_fact_paragraphs": fact_paragraphs,
+        "citation_cited_fact_paragraphs": cited_fact_paragraphs,
         "valid_citation_ratio": citation_valid / citation_used if citation_used else None,
         "ungrounded_conclusions": sum(row["ungrounded_conclusions"] for row in rows),
     }
@@ -238,54 +293,63 @@ def summarize_a(rows: list[dict[str, Any]] | None) -> dict[str, Any] | None:
     found_total = sum(row["conflict_found"] for row in rows)
     citation_used = sum(row["citation_used"] for row in rows)
     citation_valid = sum(row["citation_valid"] for row in rows)
+    fact_paragraphs = sum(row["citation_fact_paragraphs"] for row in rows)
+    cited_fact_paragraphs = sum(row["citation_cited_fact_paragraphs"] for row in rows)
     return {
         "conflict_recall": found_total / expected_total if expected_total else 1.0,
         "conflict_found": found_total,
         "conflict_total": expected_total,
+        "citation_presence": cited_fact_paragraphs / fact_paragraphs if fact_paragraphs else None,
+        "citation_fact_paragraphs": fact_paragraphs,
+        "citation_cited_fact_paragraphs": cited_fact_paragraphs,
         "valid_citation_ratio": citation_valid / citation_used if citation_used else None,
         "ungrounded_conclusions": sum(row["ungrounded_conclusions"] for row in rows),
     }
 
 
-def markdown_table(b_rows: list[dict[str, Any]], a_rows: list[dict[str, Any]] | None) -> str:
+def markdown_table(
+    b_rows: list[dict[str, Any]],
+    a0_rows: list[dict[str, Any]] | None,
+    a_rows: list[dict[str, Any]] | None,
+) -> str:
+    a0_by_case = {row["case"]: row for row in a0_rows or []}
     a_by_case = {row["case"]: row for row in a_rows or []}
     lines = [
-        "| Case | A conflict recall | B conflict recall | B spurious conflicts | A valid citation ratio | B valid citation ratio | A ungrounded conclusions | B ungrounded conclusions |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
+        "| Case | Group | citation_presence | valid_citation_ratio | ungrounded_conclusions | conflict_recall* | spurious_conflicts(B) |",
+        "|---|---|---:|---:|---:|---:|---:|",
     ]
-    for b_row in b_rows:
-        a_row = a_by_case.get(b_row["case"])
+
+    def append_row(case: str, group: str, row: dict[str, Any] | None, spurious: str = "N/A") -> None:
         lines.append(
-            "| {case} | {a_recall} | {b_recall:.2f} | {spurious} | {a_citation} | {b_citation} | {a_ungrounded} | {b_ungrounded} |".format(
-                case=b_row["case"],
-                a_recall="N/A" if a_row is None else f"{a_row['conflict_recall']:.2f}",
-                b_recall=b_row["conflict_recall"],
-                spurious=b_row["spurious_conflicts"],
-                a_citation="N/A" if a_row is None else format_ratio(a_row["valid_citation_ratio"]),
-                b_citation=format_ratio(b_row["valid_citation_ratio"]),
-                a_ungrounded="N/A" if a_row is None else str(a_row["ungrounded_conclusions"]),
-                b_ungrounded=b_row["ungrounded_conclusions"],
+            "| {case} | {group} | {presence} | {citation} | {ungrounded} | {recall} | {spurious} |".format(
+                case=case,
+                group=group,
+                presence="N/A" if row is None else format_ratio(row["citation_presence"]),
+                citation="N/A" if row is None else format_ratio(row["valid_citation_ratio"]),
+                ungrounded="N/A" if row is None else str(row["ungrounded_conclusions"]),
+                recall="N/A" if row is None else f"{row['conflict_recall']:.2f}",
+                spurious=spurious,
             )
         )
+
+    for b_row in b_rows:
+        case = b_row["case"]
+        append_row(case, "A0(朴素直出)", a0_by_case.get(case))
+        append_row(case, "A(带引用直出)", a_by_case.get(case))
+        append_row(case, "B(证据链)", b_row, str(b_row["spurious_conflicts"]))
     b_summary = summarize_b(b_rows)
+    a0_summary = summarize_a(a0_rows)
     a_summary = summarize_a(a_rows)
-    lines.append(
-        "| **Summary** | {a_recall} | {b_recall:.2f} | {spurious} | {a_citation} | {b_citation} | {a_ungrounded} | {b_ungrounded} |".format(
-            a_recall="N/A" if a_summary is None else f"{a_summary['conflict_recall']:.2f}",
-            b_recall=b_summary["conflict_recall"],
-            spurious=b_summary["spurious_conflicts"],
-            a_citation="N/A" if a_summary is None else format_ratio(a_summary["valid_citation_ratio"]),
-            b_citation=format_ratio(b_summary["valid_citation_ratio"]),
-            a_ungrounded="N/A" if a_summary is None else str(a_summary["ungrounded_conclusions"]),
-            b_ungrounded=b_summary["ungrounded_conclusions"],
-        )
-    )
+    append_row("**Summary**", "A0(朴素直出)", a0_summary)
+    append_row("**Summary**", "A(带引用直出)", a_summary)
+    append_row("**Summary**", "B(证据链)", b_summary, str(b_summary["spurious_conflicts"]))
     return "\n".join(lines)
 
 
 def write_result(
     run_mode: dict[str, Any],
     b_rows: list[dict[str, Any]],
+    a0_rows: list[dict[str, Any]] | None,
     a_rows: list[dict[str, Any]] | None,
     a_skip_reason: str | None,
 ) -> None:
@@ -308,16 +372,18 @@ def write_result(
         f"- ASR：`{(run_mode.get('asr') or {}).get('source')}`",
     ]
     if a_skip_reason:
-        body_parts.append(f"- A 臂状态：N/A，{a_skip_reason}")
+        body_parts.append(f"- A0/A 状态：N/A，{a_skip_reason}")
     body_parts.extend(
         [
             "",
-            "A 臂为同案证据文本一次性直出报告；冲突召回为宽松启发式上界，只判断两个预期冲突取值是否同时出现，不判断是否真正指出矛盾。",
-            "B 臂为 EviTrace 证据链完整管线，统计结构化冲突、报告引用合法性和结论段落引用覆盖。",
+            "三组定义：A0(朴素直出) 为旧版无编号、无引用要求的一次 LLM 直出；A(带引用直出) 为同一证据编号、逐事实引用要求的一次 LLM 直出；B(证据链) 为 EviTrace 证据链完整管线。",
+            "`citation_presence` 为事实性段落中出现 `E-xxxx` 引用的比例；`valid_citation_ratio` 为报告中合法 `E-xxxx` 引用数 / 全部 `E-xxxx` 引用数。",
+            "`conflict_recall*` 为宽松启发式上界：只判断两个预期冲突取值是否同时出现，未判定报告是否真正点明矛盾。",
+            "`spurious_conflicts(B)` 仅适用于 B 组结构化冲突输出。",
             "",
-            "## A vs B",
+            "## A0 vs A vs B",
             "",
-            markdown_table(b_rows, a_rows),
+            markdown_table(b_rows, a0_rows, a_rows),
             "",
         ]
     )
@@ -349,11 +415,12 @@ def main() -> int:
         a_skip_reason = None
         run_a = not settings.effective_mock_llm
         if not run_a:
-            a_skip_reason = "A 臂需真实 LLM，已跳过；仅运行 B 臂与管线指标"
+            a_skip_reason = "A0/A 均需真实 LLM，已跳过；仅运行 B 臂与管线指标"
             print(a_skip_reason)
 
         data_root = settings.data_root_path
         b_rows: list[dict[str, Any]] = []
+        a0_rows: list[dict[str, Any]] | None = [] if run_a else None
         a_rows: list[dict[str, Any]] | None = [] if run_a else None
         with TestClient(app) as client:
             admin_headers = evaluate_demo.login(client, "admin", "admin-password")
@@ -361,13 +428,15 @@ def main() -> int:
             for case_name in evaluate_demo.CASE_DIRS:
                 b_row = run_b_case(client, analyst_headers, case_name, data_root)
                 b_rows.append(b_row)
+                if a0_rows is not None:
+                    a0_rows.append(run_a0_case(case_name, b_row["expected_conflicts"], b_row["evidence"]))
                 if a_rows is not None:
                     a_rows.append(run_a_case(case_name, b_row["expected_conflicts"], b_row["evidence"]))
 
         print()
-        print("A vs B")
-        print(markdown_table(b_rows, a_rows))
-        write_result(run_mode, b_rows, a_rows, a_skip_reason)
+        print("A0 vs A vs B")
+        print(markdown_table(b_rows, a0_rows, a_rows))
+        write_result(run_mode, b_rows, a0_rows, a_rows, a_skip_reason)
         print(f"\nSaved {OUTPUT_PATH.relative_to(ROOT)}")
     return 0
 
